@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jugglebot"
+version = "0.1.0"
+description = "Modular robotics control framework for cable and Stewart platforms"
+authors = [{ name = "Jon", email = "you@example.com" }]
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+dependencies = [
+    "numpy>=1.26",
+    "pyyaml>=6.0",
+]
+
+# Optional dependency groups
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+    "black",
+    "mypy",
+]
+sim = [
+    "mujoco",
+    "matplotlib",
+]
+optimization = [
+    "osqp",
+]
+
+# Command line entry points
+[project.scripts]
+robotd = "jugglebot.apps.robotd:main"
+simd = "jugglebot.apps.simd:main"
