@@ -237,6 +237,63 @@ class MuJoCoSimulationDriver(RobotDriver):
                 return float(self.data.qvel[self.spool_dadr[idx]])
         return None
 
+    def get_platform_state(self):
+        """Get platform state [x,y,z,roll,pitch], [xd,yd,zd,rolld,pitchd]."""
+        if self.data is None:
+            return None, None
+        with self._data_access():
+            q = self.data.qpos[self.plat_qadr].copy()
+            qd = self.data.qvel[self.plat_dadr].copy()
+        return q, qd
+
+    def compute_platform_wrench(self, qdd_cmd):
+        """Compute platform generalized wrench tau = (M*qdd_full + bias)[plat_dofs]."""
+        if self.data is None:
+            return np.zeros(5, dtype=float)
+        with self._data_access():
+            import mujoco
+
+            qdd_cmd = np.asarray(qdd_cmd, dtype=float)
+            qdd_full = np.zeros(self.model.nv, dtype=float)
+            qdd_full[self.plat_dadr] = qdd_cmd
+
+            mujoco.mj_forward(self.model, self.data)
+            M = np.zeros((self.model.nv, self.model.nv), dtype=float)
+            mujoco.mj_fullM(self.model, M, self.data.qM)
+            bias = self.data.qfrc_bias.copy()
+            tau_full = M @ qdd_full + bias
+            return tau_full[self.plat_dadr].copy()
+
+    def get_cable_jacobian_plat(self):
+        """Return cable-length Jacobian wrt platform DOFs; shape (6,5)."""
+        if self.data is None:
+            return np.zeros((6, 5), dtype=float)
+        with self._data_access():
+            import mujoco
+
+            mujoco.mj_forward(self.model, self.data)
+            J_plat = np.zeros((6, len(self.plat_dadr)), dtype=float)
+            jacp = np.zeros((3, self.model.nv), dtype=float)
+            jacr = np.zeros((3, self.model.nv), dtype=float)
+
+            for i in range(6):
+                a = self.data.site_xpos[self.anchor_sids[i]].copy()
+                p = self.data.site_xpos[self.plat_sids[i]].copy()
+                d = p - a
+                Li = float(np.linalg.norm(d))
+                if Li < 1e-12:
+                    u = np.zeros(3, dtype=float)
+                else:
+                    u = d / Li
+
+                jacp[:] = 0.0
+                jacr[:] = 0.0
+                mujoco.mj_jacSite(self.model, self.data, jacp, jacr, self.plat_sids[i])
+                dL_dqvel = u @ jacp
+                J_plat[i, :] = dL_dqvel[self.plat_dadr]
+
+            return J_plat
+
     def set_controller_mode(self, axis_id: int, mode: str):
         """Track controller mode for compatibility with hardware driver semantics."""
         if axis_id in self.axis_ids:

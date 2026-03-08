@@ -89,7 +89,7 @@
       <joint joint="spool1" coef="0.01"/>
     </fixed>
     <!-- Cable geometry (spatial tendon): anchor ai -> platform pi -->
-    <spatial name="cable1" limited="false" range="0 10" stiffness="0" damping="0">
+    <spatial name="cable1" limited="false" range="0 1.3" stiffness="0" damping="0">
       <site site="a1"/>
       <site site="p1"/>
     </spatial>
@@ -98,7 +98,7 @@
       <joint joint="spool2" coef="0.01"/>
     </fixed>
     <!-- Cable geometry (spatial tendon): anchor ai -> platform pi -->
-    <spatial name="cable2" limited="false" range="0 10" stiffness="0" damping="0">
+    <spatial name="cable2" limited="false" range="0 1.3" stiffness="0" damping="0">
       <site site="a2"/>
       <site site="p2"/>
     </spatial>
@@ -107,7 +107,7 @@
       <joint joint="spool3" coef="0.01"/>
     </fixed>
     <!-- Cable geometry (spatial tendon): anchor ai -> platform pi -->
-    <spatial name="cable3" limited="false" range="0 10" stiffness="0" damping="0">
+    <spatial name="cable3" limited="false" range="0 1.3" stiffness="0" damping="0">
       <site site="a3"/>
       <site site="p3"/>
     </spatial>
@@ -116,7 +116,7 @@
       <joint joint="spool4" coef="0.01"/>
     </fixed>
     <!-- Cable geometry (spatial tendon): anchor ai -> platform pi -->
-    <spatial name="cable4" limited="false" range="0 10" stiffness="0" damping="0">
+    <spatial name="cable4" limited="false" range="0 1.3" stiffness="0" damping="0">
       <site site="a4"/>
       <site site="p4"/>
     </spatial>
@@ -125,7 +125,7 @@
       <joint joint="spool5" coef="0.01"/>
     </fixed>
     <!-- Cable geometry (spatial tendon): anchor ai -> platform pi -->
-    <spatial name="cable5" limited="false" range="0 10" stiffness="0" damping="0">
+    <spatial name="cable5" limited="false" range="0 1.3" stiffness="0" damping="0">
       <site site="a5"/>
       <site site="p5"/>
     </spatial>
@@ -134,7 +134,7 @@
       <joint joint="spool6" coef="0.01"/>
     </fixed>
     <!-- Cable geometry (spatial tendon): anchor ai -> platform pi -->
-    <spatial name="cable6" limited="false" range="0 10" stiffness="0" damping="0">
+    <spatial name="cable6" limited="false" range="0 1.3" stiffness="0" damping="0">
       <site site="a6"/>
       <site site="p6"/>
     </spatial>
