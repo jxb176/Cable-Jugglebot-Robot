@@ -5,6 +5,7 @@ MuJoCo-based simulation driver for cable robot.
 import logging
 import threading
 import time
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Optional, Callable, List, Tuple
 
@@ -23,26 +24,22 @@ class MuJoCoSimulationDriver(RobotDriver):
 
     def __init__(self, axis_ids: List[int] = None, model_path: str = None, enable_viewer: bool = False):
         self.axis_ids = axis_ids or [0, 1, 2, 3, 4, 5]
-        self.model_path = model_path or str(Path(__file__).parent / "cable_robot_5dof_winch.xml")
+        self.model_path = model_path or str(
+            Path(__file__).parent.parent / "simulation" / "cable_robot_5dof_winch.xml"
+        )
         self.enable_viewer = enable_viewer
+        self._mj_lock = threading.Lock()
+        self.viewer = None
 
         # MuJoCo components
         self.model = None
         self.data = None
 
-        # Control parameters (similar to prototype)
-        self.Kp = np.diag([5000.0, 5000.0, 6000.0, 500.0, 500.0])
-        self.Kd = np.diag([500.0, 500.0, 400.0, 100.0, 100.0])
-        self.Tmin = 5.0
-        self.Tmax = 200.0
-        self.lam = 1e-2
-        self.alpha_Tprev = 0.7
-
         # State
         self.running = False
-        self.hand_pose_cmd = (0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0)  # position, quaternion
-        self.t_prev = 0.0
-        self.T_prev = None
+        self._axis_torque_cmd = {aid: 0.0 for aid in self.axis_ids}
+        self._axis_mode = {aid: "torque" for aid in self.axis_ids}
+        self._axis_state = {aid: "idle" for aid in self.axis_ids}
 
         # Callbacks
         self._position_callback: Optional[Callable[[int, float], None]] = None
@@ -80,7 +77,7 @@ class MuJoCoSimulationDriver(RobotDriver):
         self._setup_ids()
 
         # Set timestep for real-time control (500 Hz)
-        self.model.opt.timestep = 0.002
+        self.model.opt.timestep = 0.0002
 
         self.running = True
 
@@ -158,137 +155,34 @@ class MuJoCoSimulationDriver(RobotDriver):
         return r
 
     def _simulation_loop(self):
-        """Main simulation loop running at 500 Hz."""
-        import mujoco
-
+        """Main simulation loop: apply commanded torques, then step dynamics."""
         dt = float(self.model.opt.timestep)
 
         while self.running:
-            t = float(self.data.time)
+            with self._data_access():
+                for i, aid in enumerate(self.axis_ids):
+                    torque_nm = float(self._axis_torque_cmd.get(aid, 0.0))
+                    if self._axis_state.get(aid) != "closed_loop":
+                        torque_nm = 0.0
+                    self.data.ctrl[self.act_ids[i]] = max(-10.0, min(10.0, torque_nm))
 
-            # Get current platform state
-            q = self.data.qpos[self.plat_qadr].copy()
-            qd = self.data.qvel[self.plat_dadr].copy()
+                # Step simulation
+                import mujoco
+                mujoco.mj_step(self.model, self.data)
 
-            # Desired pose from hand_pose_cmd
-            t_des, q_des = self.hand_pose_cmd
-            # Convert mm to meters
-            t_des_m = (t_des[0] / 1000.0, t_des[1] / 1000.0, t_des[2] / 1000.0)
-            qref = np.array([t_des_m[0], t_des_m[1], t_des_m[2], 0.0, 0.0])  # x,y,z, assume no roll/pitch for now
-            qdref = np.zeros(5)  # TODO: compute from pose profile
-            qddref = np.zeros(5)
-
-            # Computed acceleration control
-            e = qref - q
-            ed = qdref - qd
-            qdd_cmd = qddref + (self.Kp @ e) + (self.Kd @ ed)
-
-            # Full acceleration vector
-            qdd_full = np.zeros(self.model.nv, dtype=float)
-            qdd_full[self.plat_dadr] = qdd_cmd
-
-            # Mass matrix and bias forces
-            mujoco.mj_forward(self.model, self.data)
-            M = self._full_mass_matrix()
-            bias = self.data.qfrc_bias.copy()
-
-            tau_full = M @ qdd_full + bias
-            tau_plat_des = tau_full[self.plat_dadr]
-
-            # Cable length jacobian
-            _, J_len_plat = self._cable_lengths_and_jacobian_plat()
-
-            # Tension allocation
-            T_des = self._solve_tensions_least_squares(J_len_plat, tau_plat_des)
-
-            # Motor torques (simplified - no feedforward for now)
-            tau_cmd = self.r * T_des
-
-            # Apply torque limits
-            umin = np.full(6, -10.0)  # From XML
-            umax = np.full(6, 10.0)
-            tau_cmd = np.clip(tau_cmd, umin, umax)
-
-            # Apply to actuators
-            self.data.ctrl[self.act_ids] = tau_cmd
-
-            # Step simulation
-            mujoco.mj_step(self.model, self.data)
-
-            # Send feedback via callbacks
-            self._send_feedback()
+                # Send feedback via callbacks
+                self._send_feedback()
 
             # Sleep to maintain 500 Hz
             time.sleep(dt)
 
-    def _full_mass_matrix(self):
-        """Compute full mass matrix."""
-        import mujoco
-
-        M = np.zeros((self.model.nv, self.model.nv), dtype=float)
-        mujoco.mj_fullM(self.model, M, self.data.qM)
-        return M
-
-    def _cable_lengths_and_jacobian_plat(self):
-        """Compute cable lengths and Jacobian w.r.t platform DOFs."""
-        import mujoco
-
-        mujoco.mj_forward(self.model, self.data)
-
-        L = np.zeros(6, dtype=float)
-        J_plat = np.zeros((6, len(self.plat_dadr)), dtype=float)
-
-        jacp = np.zeros((3, self.model.nv), dtype=float)
-        jacr = np.zeros((3, self.model.nv), dtype=float)
-
-        for i in range(6):
-            a = self.data.site_xpos[self.anchor_sids[i]].copy()
-            p = self.data.site_xpos[self.plat_sids[i]].copy()
-
-            d = p - a
-            Li = float(np.linalg.norm(d))
-            if Li < 1e-12:
-                u = np.zeros(3, dtype=float)
-            else:
-                u = d / Li
-
-            # Jacobian of platform site
-            jacp[:] = 0.0
-            jacr[:] = 0.0
-            mujoco.mj_jacSite(self.model, self.data, jacp, jacr, self.plat_sids[i])
-
-            dL_dqvel = u @ jacp
-            L[i] = Li
-            J_plat[i, :] = dL_dqvel[self.plat_dadr]
-
-        return L, J_plat
-
-    def _solve_tensions_least_squares(self, J_len_plat, tau_plat_des):
-        """Solve for cable tensions using least squares."""
-        J = np.asarray(J_len_plat, dtype=float)
-        A = J.T
-        nt = A.shape[1]
-
-        lb = np.full(nt, self.Tmin, dtype=float)
-        ub = np.full(nt, self.Tmax, dtype=float)
-
-        if self.T_prev is None:
-            Tref = lb.copy()
-        else:
-            Tref = self.alpha_Tprev * np.asarray(self.T_prev, dtype=float) + (1.0 - self.alpha_Tprev) * lb
-
-        T = Tref.copy()
-
-        ATA = A.T @ A
-        L = float(np.linalg.norm(ATA, 2) + self.lam)
-        step = 1.0 / max(L, 1e-9)
-
-        for _ in range(80):  # iters
-            grad = 2.0 * (A.T @ (A @ T - tau_plat_des)) + 2.0 * self.lam * (T - Tref)
-            T = np.clip(T - step * grad, lb, ub)
-
-        self.T_prev = T.copy()
-        return T
+    def _data_access(self):
+        """Lock MuJoCo data access across simulation and passive viewer threads."""
+        stack = ExitStack()
+        stack.enter_context(self._mj_lock)
+        if self.viewer is not None:
+            stack.enter_context(self.viewer.lock())
+        return stack
 
     def _send_feedback(self):
         """Send feedback via callbacks."""
@@ -316,44 +210,55 @@ class MuJoCoSimulationDriver(RobotDriver):
                 self._heartbeat_callback(aid, 0, 8, 0)  # OK status
 
     def set_axis_position(self, axis_id: int, position: float):
-        """Set position setpoint - not used in this driver."""
-        pass
+        """Set spool position directly (turns)."""
+        if self.data is not None and axis_id in self.axis_ids:
+            idx = self.axis_ids.index(axis_id)
+            with self._data_access():
+                self.data.qpos[self.spool_qadr[idx]] = float(position)
 
     def set_axis_torque(self, axis_id: int, torque: float):
-        """Set torque setpoint - handled internally."""
-        pass
+        """Set spool torque setpoint (Nm)."""
+        if axis_id in self.axis_ids:
+            self._axis_torque_cmd[axis_id] = float(torque)
 
     def get_axis_position(self, axis_id: int) -> Optional[float]:
         """Get position feedback."""
         if self.data is not None:
             idx = self.axis_ids.index(axis_id)
-            return float(self.data.qpos[self.spool_qadr[idx]])
+            with self._data_access():
+                return float(self.data.qpos[self.spool_qadr[idx]])
         return None
 
     def get_axis_velocity(self, axis_id: int) -> Optional[float]:
         """Get velocity feedback."""
         if self.data is not None:
             idx = self.axis_ids.index(axis_id)
-            return float(self.data.qvel[self.spool_dadr[idx]])
+            with self._data_access():
+                return float(self.data.qvel[self.spool_dadr[idx]])
         return None
 
     def set_controller_mode(self, axis_id: int, mode: str):
-        """Set controller mode - handled internally."""
-        pass
+        """Track controller mode for compatibility with hardware driver semantics."""
+        if axis_id in self.axis_ids:
+            self._axis_mode[axis_id] = str(mode)
 
     def set_axis_state(self, axis_id: int, state: str):
-        """Set axis state - handled internally."""
-        pass
+        """Track axis state; idle axes apply zero torque."""
+        if axis_id in self.axis_ids:
+            self._axis_state[axis_id] = str(state)
+            if str(state) == "idle":
+                self._axis_torque_cmd[axis_id] = 0.0
 
     def set_absolute_position(self, axis_id: int, position: float):
         """Set absolute position reference."""
         if self.data is not None:
             idx = self.axis_ids.index(axis_id)
-            self.data.qpos[self.spool_qadr[idx]] = position
+            with self._data_access():
+                self.data.qpos[self.spool_qadr[idx]] = position
 
     def set_hand_pose(self, t_mm, q):
-        """Set desired hand pose for simulation control."""
-        self.hand_pose_cmd = (t_mm, q)
+        """Unused by plant-only simulation driver (control loop lives in robot_server)."""
+        return
 
     # Callback setters
     def set_position_callback(self, callback: Callable[[int, float], None]):
@@ -365,7 +270,7 @@ class MuJoCoSimulationDriver(RobotDriver):
     def set_bus_callback(self, callback: Callable[[int, float, float], None]):
         self._bus_callback = callback
 
-    def set_current_callback(self, callback: Callable[[int, float], None]]:
+    def set_current_callback(self, callback: Callable[[int, float], None]):
         self._current_callback = callback
 
     def set_temp_callback(self, callback: Callable[[int, float, float], None]):
@@ -381,10 +286,15 @@ class MuJoCoSimulationDriver(RobotDriver):
 
         def viewer_thread():
             with mujoco.viewer.launch_passive(self.model, self.data) as viewer:
+                self.viewer = viewer
                 viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_TENDON] = True
                 viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_JOINT] = True
                 while self.running and viewer.is_running():
+                    # Passive viewer requires explicit sync to render state updates.
+                    with self._data_access():
+                        viewer.sync()
                     time.sleep(0.01)  # Small sleep to not hog CPU
+                self.viewer = None
 
         self.viewer_thread = threading.Thread(target=viewer_thread, daemon=True)
         self.viewer_thread.start()

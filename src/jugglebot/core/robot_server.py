@@ -8,9 +8,15 @@ import logging
 from datetime import datetime
 import subprocess
 import math
-from ODriveCANSimple import ODriveCanManager, AxisState  # <-- your new module
 # --- Cable IK ---
-from cable_ik import CableRobotGeometry, pose_to_cable_lengths_mm, q_from_axis_angle, q_mul, q_norm
+from jugglebot.core.cable_ik import (
+    CableRobotGeometry,
+    WinchCalibration,
+    pose_to_cable_lengths_mm,
+    q_from_axis_angle,
+    q_mul,
+    q_norm,
+)
 
 TCP_CMD_PORT = 5555
 UDP_TELEM_PORT = 5556
@@ -28,7 +34,13 @@ TELEMETRY_RATE_HZ = 50.0
 MM_PER_TURN = [-62.832] * 6  # 2*pi*10mm = 62.832 mm/turn, with sign convention applied
 # Pretension mapping: tension [N] -> capstan torque [Nm]
 CAPSTAN_RADIUS_M = 0.010  # 10 mm
-TORQUE_PER_TENSION = CAPSTAN_RADIUS_M  # Nm per N  (T = F*r)
+MOTOR_TORQUE_DIRECTION = 1  # Set to -1 if positive motor torque winds the cable and increases tension, +1 if opposite. This depends on your motor/winch wiring and should be set to ensure that positive torque commands increase tension.
+TORQUE_PER_TENSION = MOTOR_TORQUE_DIRECTION * CAPSTAN_RADIUS_M  # Nm per N  (T = F*r)
+TORQUE_CTRL_KP_N_PER_MM = 0.6
+TORQUE_CTRL_KD_N_PER_MMPS = 0.02
+TORQUE_CTRL_BIAS_N = 12.0
+TORQUE_CTRL_MIN_N = 0.0
+TORQUE_CTRL_MAX_N = 180.0
 
 #CLEANUP into ODRIVE library
 # ODrive controller modes (CANSimple Set_Controller_Mode)
@@ -60,7 +72,14 @@ def quat_from_rpy_deg(roll_deg: float, pitch_deg: float, yaw_deg: float = 0.0):
 HOME_Q = quat_from_rpy_deg(HOME_ROLL_DEG, HOME_PITCH_DEG, HOME_YAW_DEG)
 HOME_CABLE_MM = pose_to_cable_lengths_mm(GEOM, HOME_T_WORLD_MM, HOME_Q)  # returns mm given your mm geometry
 
-def turns_to_mm(turns_list, cal: WinchCalibration):
+DEFAULT_WINCH_CAL = WinchCalibration(
+    spool_radius_mm=[10.0] * 6,
+    gear_ratio=[1.0] * 6,
+    sign=[-1.0] * 6,
+    zero_length_mm=[0.0] * 6,
+)
+
+def turns_to_mm(turns_list, cal: WinchCalibration = DEFAULT_WINCH_CAL):
     """Convert [turns] -> [mm] elementwise using calibration."""
     if not isinstance(turns_list, (list, tuple)) or len(turns_list) != 6:
         raise ValueError("turns_list must be length-6 list/tuple")
@@ -77,7 +96,7 @@ def turns_to_mm(turns_list, cal: WinchCalibration):
         out.append(L)
     return out
 
-def mm_to_turns(mm_list, cal: WinchCalibration):
+def mm_to_turns(mm_list, cal: WinchCalibration = DEFAULT_WINCH_CAL):
     """Convert [mm] -> [turns] elementwise using calibration."""
     if not isinstance(mm_list, (list, tuple)) or len(mm_list) != 6:
         raise ValueError("mm_list must be length-6 list/tuple")
@@ -726,16 +745,31 @@ class ControlBridge(threading.Thread):
                 if st == "enable":
                     try:
                         t_mm, q = self.state.get_hand_pose()
-                        # For simulation, set the desired pose
-                        if hasattr(self.driver, 'set_hand_pose'):
-                            self.driver.set_hand_pose(t_mm, q)
-                        # For hardware, compute IK and send to motors
+                        # Compute desired cable-length deltas (mm) from commanded hand pose.
                         cable_mm = pose_to_cable_lengths_mm(GEOM, t_mm, q)
                         cmd_mm = [cable_mm[i] - HOME_CABLE_MM[i] for i in range(6)]
-                        cmd_turns = mm_to_turns(cmd_mm)
+                        fb_pos_turns = self.state.get_pos_fbk()
+                        fb_vel_turnsps = self.state.get_vel_fbk()
 
+                        # Cable-space PD + bias tension -> spool torque command.
                         for i, aid in enumerate(self.axis_ids):
-                            self.driver.set_axis_position(aid, cmd_turns[i])
+                            p_turns = fb_pos_turns[i] if i < len(fb_pos_turns) else None
+                            v_turnsps = fb_vel_turnsps[i] if i < len(fb_vel_turnsps) else None
+                            if p_turns is None or v_turnsps is None:
+                                self.driver.set_axis_torque(aid, 0.0)
+                                continue
+
+                            fb_mm = float(p_turns) * MM_PER_TURN[i]
+                            fb_mmps = float(v_turnsps) * MM_PER_TURN[i]
+                            err_mm = float(cmd_mm[i]) - fb_mm
+                            tension_N = (
+                                TORQUE_CTRL_BIAS_N
+                                + TORQUE_CTRL_KP_N_PER_MM * err_mm
+                                - TORQUE_CTRL_KD_N_PER_MMPS * fb_mmps
+                            )
+                            tension_N = max(TORQUE_CTRL_MIN_N, min(TORQUE_CTRL_MAX_N, tension_N))
+                            torque_nm = float(tension_N) * TORQUE_PER_TENSION
+                            self.driver.set_axis_torque(aid, torque_nm)
 
                     except Exception as e:
                         # IMPORTANT: don't kill the bridge if IK/units blow up
@@ -777,9 +811,9 @@ class ControlBridge(threading.Thread):
         try:
             for aid in self.axis_ids:
                 if st == "enable":
-                    self.driver.set_controller_mode(aid, "position")
+                    self.driver.set_controller_mode(aid, "torque")
                     self.driver.set_axis_state(aid, "closed_loop")
-                    logger.info(f"[CTRL] axis {aid}: POSITION + CLOSED_LOOP_CONTROL")
+                    logger.info(f"[CTRL] axis {aid}: TORQUE + CLOSED_LOOP_CONTROL")
 
                 elif st == "pretension":
                     self.driver.set_controller_mode(aid, "torque")
