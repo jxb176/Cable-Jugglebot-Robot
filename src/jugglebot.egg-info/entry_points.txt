@@ -1,0 +1,3 @@
+[console_scripts]
+robotd = jugglebot.apps.robotd:main
+simd = jugglebot.apps.simd:main

@@ -1,0 +1,59 @@
+robot:
+  name: cable_jugglebot_v1
+  control_rate_hz: 500
+  units: SI
+  mode: simulation  # or 'hardware'
+
+geometry:
+  anchor_points: [...]
+  platform_attach_points: [...]
+  capstan_radius_m: 0.01
+
+mass_properties:
+  platform_mass_kg: 0.108
+  platform_inertia_kgm2: [0.000152, 0.000152, 0.000254]
+
+winches:
+  spool_inertia_kgm2: 2.28e-6
+  torque_limit_nm: 1.0
+  damping_nm_per_radps: 0.0
+  direction_sign: [1, 1, -1, 1, -1, 1]
+
+tension:
+  Tmin_N: 5.0
+  Tmax_N: 150.0
+  regularization_lambda: 0.01
+  alpha_blend: 0.5
+
+controller:
+  task_space:
+    kp: [300, 300, 500, 20, 20]
+    kd: [20, 20, 30, 2, 2]
+
+allocation:
+  backend: numpy
+  max_iters: 80
+
+estimator:
+  enable_velocity_filter: true
+  vel_filter_cutoff_hz: 30.0
+
+hardware:
+  can:
+    interface: can0
+    bitrate: 1000000
+  odrive:
+    axis_ids: [0, 1, 2, 3, 4, 5]
+
+logging:
+  level: INFO
+  log_directory: logs
+  telemetry_udp:
+    enabled: true
+    host: 192.168.1.10
+    port: 5005
+
+safety:
+  watchdog_timeout_s: 0.1
+  max_pose_error_m: 0.05
+  max_velocity_mps: 3.0

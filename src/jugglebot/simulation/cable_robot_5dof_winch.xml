@@ -1,0 +1,162 @@
+<mujoco model="cable_robot_5dof">
+  <option timestep="0.0002" gravity="0 0 -9.81" integrator="RK4" />
+  <size njmax="2000" nconmax="2000" />
+  <default>
+    <joint damping="0.5" limited="false" />
+    <geom density="500" friction="1 0.5 0.1" rgba="0.7 0.7 0.7 1" />
+  </default>
+  <worldbody>
+    <geom type="plane" pos="0 0 -1.0" size="5 5 0.1" rgba="0.9 0.9 0.9 1" />
+    <site name="a1" pos=" 0.530678  0.000000  0.445777" size="0.01" rgba="1 0 0 1" />
+    <site name="a2" pos=" 0.530678  0.000000 -0.445777" size="0.01" rgba="1 0 0 1" />
+    <site name="a3" pos="-0.265339  0.459581  0.445777" size="0.01" rgba="1 0 0 1" />
+    <site name="a4" pos="-0.265339  0.459581 -0.445777" size="0.01" rgba="1 0 0 1" />
+    <site name="a5" pos="-0.265339 -0.459581  0.445777" size="0.01" rgba="1 0 0 1" />
+    <site name="a6" pos="-0.265339 -0.459581 -0.445777" size="0.01" rgba="1 0 0 1" />
+    <body name="platform" pos="0 0 0">
+
+      <joint name="jx" type="slide" axis="1 0 0" />
+      <joint name="jy" type="slide" axis="0 1 0" />
+      <joint name="jz" type="slide" axis="0 0 1" />
+      <joint name="jroll" type="hinge" axis="1 0 0" />
+      <joint name="jpitch" type="hinge" axis="0 1 0" />
+      <geom name="platform_geom" type="box" size="0.06 0.06 0.02" rgba="0.3 0.3 0.9 1" />
+      <inertial pos="0 0 0" mass="0.108" diaginertia="0.000152 0.000152 0.000254" />
+      <site name="p1" pos=" 0.057905  0.000000  0.000000" size="0.01" rgba="0 0 0 1" />
+      <site name="p2" pos=" 0.049384  0.000000 -0.011149" size="0.01" rgba="0 0 0 1" />
+      <site name="p3" pos="-0.028952  0.050147  0.000000" size="0.01" rgba="0 0 0 1" />
+      <site name="p4" pos="-0.024692  0.042768 -0.011149" size="0.01" rgba="0 0 0 1" />
+      <site name="p5" pos="-0.028952 -0.050147  0.000000" size="0.01" rgba="0 0 0 1" />
+      <site name="p6" pos="-0.024692 -0.042768 -0.011149" size="0.01" rgba="0 0 0 1" />
+
+      <!-- CUP: a "funnel" made from 12 capsules in a ring -->
+      <!-- Attached to platform for juggling ball -->
+      <body name="cup" pos="0 0 0.04">
+        <!-- Cup walls - 12 capsules in a ring forming a cone -->
+        <geom name="cup_wall_0"  type="capsule" fromto=" 0.030  0.000  0.000   0.015  0.000 -0.030" size="0.002" rgba="0.6 0.6 0.6 1"/>
+        <geom name="cup_wall_1"  type="capsule" fromto=" 0.026  0.015  0.000   0.013  0.007 -0.030" size="0.002" rgba="0.6 0.6 0.6 1"/>
+        <geom name="cup_wall_2"  type="capsule" fromto=" 0.015  0.026  0.000   0.007  0.013 -0.030" size="0.002" rgba="0.6 0.6 0.6 1"/>
+        <geom name="cup_wall_3"  type="capsule" fromto=" 0.000  0.030  0.000   0.000  0.015 -0.030" size="0.002" rgba="0.6 0.6 0.6 1"/>
+        <geom name="cup_wall_4"  type="capsule" fromto="-0.015  0.026  0.000  -0.007  0.013 -0.030" size="0.002" rgba="0.6 0.6 0.6 1"/>
+        <geom name="cup_wall_5"  type="capsule" fromto="-0.026  0.015  0.000  -0.013  0.007 -0.030" size="0.002" rgba="0.6 0.6 0.6 1"/>
+        <geom name="cup_wall_6"  type="capsule" fromto="-0.030  0.000  0.000  -0.015  0.000 -0.030" size="0.002" rgba="0.6 0.6 0.6 1"/>
+        <geom name="cup_wall_7"  type="capsule" fromto="-0.026 -0.015  0.000  -0.013 -0.007 -0.030" size="0.002" rgba="0.6 0.6 0.6 1"/>
+        <geom name="cup_wall_8"  type="capsule" fromto="-0.015 -0.026  0.000  -0.007 -0.013 -0.030" size="0.002" rgba="0.6 0.6 0.6 1"/>
+        <geom name="cup_wall_9"  type="capsule" fromto=" 0.000 -0.030  0.000   0.000 -0.015 -0.030" size="0.002" rgba="0.6 0.6 0.6 1"/>
+        <geom name="cup_wall_10" type="capsule" fromto=" 0.015 -0.026  0.000   0.007 -0.013 -0.030" size="0.002" rgba="0.6 0.6 0.6 1"/>
+        <geom name="cup_wall_11" type="capsule" fromto=" 0.026 -0.015  0.000   0.013 -0.007 -0.030" size="0.002" rgba="0.6 0.6 0.6 1"/>
+
+        <!-- Cup floor so ball doesn't drop through -->
+        <geom name="cup_floor" type="cylinder" pos="0 0 -0.030" size="0.012 0.001" rgba="0.5 0.5 0.5 1"/>
+      </body>
+    </body>
+
+      <body name="spool1" pos="0 0 0">
+          <joint name="spool1" type="hinge" axis="0 0 1" limited="false" damping="0.0002" armature="2.28e-6" />
+          <inertial pos="0 0 0" mass="0.001" diaginertia="1.14e-06 1.14e-06 2.28e-06" />
+      </body>
+      <body name="spool2" pos="0 0 0">
+          <joint name="spool2" type="hinge" axis="0 0 1" limited="false" damping="0.0002" armature="2.28e-6" />
+          <inertial pos="0 0 0" mass="0.001" diaginertia="1.14e-06 1.14e-06 2.28e-06" />
+      </body>
+      <body name="spool3" pos="0 0 0"><joint name="spool3" type="hinge" axis="0 0 1" limited="false" damping="0.0002" armature="2.28e-6" />
+          <inertial pos="0 0 0" mass="0.001" diaginertia="1.14e-06 1.14e-06 2.28e-06" />
+      </body>
+      <body name="spool4" pos="0 0 0">
+          <joint name="spool4" type="hinge" axis="0 0 1" limited="false" damping="0.0002" armature="2.28e-6" />
+          <inertial pos="0 0 0" mass="0.001" diaginertia="1.14e-06 1.14e-06 2.28e-06" />
+      </body>
+      <body name="spool5" pos="0 0 0">
+          <joint name="spool5" type="hinge" axis="0 0 1" limited="false" damping="0.0002" armature="2.28e-6" />
+          <inertial pos="0 0 0" mass="0.001" diaginertia="1.14e-06 1.14e-06 2.28e-06" />
+      </body>
+      <body name="spool6" pos="0 0 0">
+          <joint name="spool6" type="hinge" axis="0 0 1" limited="false" damping="0.0002" armature="2.28e-6" />
+          <inertial pos="0 0 0" mass="0.001" diaginertia="1.14e-06 1.14e-06 2.28e-06" />
+      </body>
+
+      <!-- Juggling ball: free-floating sphere above the cup -->
+      <body name="ball" pos="0 0 0.1">
+        <freejoint/>
+        <inertial pos="0 0 0" mass="0.07" diaginertia="2e-5 2e-5 2e-5"/>
+        <geom type="sphere" size="0.03" rgba="1 0.2 0.2 1" friction="1 0.005 0.001" solref="0.01 1.5" solimp="0.9 0.95 0.001"/>
+      </body>
+  </worldbody>
+
+  <tendon>
+    <!-- Spool payout model (fixed tendon): length = 0.01000 * q_spool1 -->
+    <fixed name="payout1" limited="false">
+      <joint joint="spool1" coef="0.01"/>
+    </fixed>
+    <!-- Cable geometry (spatial tendon): anchor ai -> platform pi -->
+    <spatial name="cable1" limited="false" range="0 10" stiffness="0" damping="0">
+      <site site="a1"/>
+      <site site="p1"/>
+    </spatial>
+    <!-- Spool payout model (fixed tendon): length = 0.01000 * q_spool2 -->
+    <fixed name="payout2" limited="false">
+      <joint joint="spool2" coef="0.01"/>
+    </fixed>
+    <!-- Cable geometry (spatial tendon): anchor ai -> platform pi -->
+    <spatial name="cable2" limited="false" range="0 10" stiffness="0" damping="0">
+      <site site="a2"/>
+      <site site="p2"/>
+    </spatial>
+    <!-- Spool payout model (fixed tendon): length = 0.01000 * q_spool3 -->
+    <fixed name="payout3" limited="false">
+      <joint joint="spool3" coef="0.01"/>
+    </fixed>
+    <!-- Cable geometry (spatial tendon): anchor ai -> platform pi -->
+    <spatial name="cable3" limited="false" range="0 10" stiffness="0" damping="0">
+      <site site="a3"/>
+      <site site="p3"/>
+    </spatial>
+    <!-- Spool payout model (fixed tendon): length = 0.01000 * q_spool4 -->
+    <fixed name="payout4" limited="false">
+      <joint joint="spool4" coef="0.01"/>
+    </fixed>
+    <!-- Cable geometry (spatial tendon): anchor ai -> platform pi -->
+    <spatial name="cable4" limited="false" range="0 10" stiffness="0" damping="0">
+      <site site="a4"/>
+      <site site="p4"/>
+    </spatial>
+    <!-- Spool payout model (fixed tendon): length = 0.01000 * q_spool5 -->
+    <fixed name="payout5" limited="false">
+      <joint joint="spool5" coef="0.01"/>
+    </fixed>
+    <!-- Cable geometry (spatial tendon): anchor ai -> platform pi -->
+    <spatial name="cable5" limited="false" range="0 10" stiffness="0" damping="0">
+      <site site="a5"/>
+      <site site="p5"/>
+    </spatial>
+    <!-- Spool payout model (fixed tendon): length = 0.01000 * q_spool6 -->
+    <fixed name="payout6" limited="false">
+      <joint joint="spool6" coef="0.01"/>
+    </fixed>
+    <!-- Cable geometry (spatial tendon): anchor ai -> platform pi -->
+    <spatial name="cable6" limited="false" range="0 10" stiffness="0" damping="0">
+      <site site="a6"/>
+      <site site="p6"/>
+    </spatial>
+</tendon>
+
+  <!-- Equality: cable_len = offset + payout_len -->
+  <equality>
+    <tendon name="eq_cable1" tendon1="cable1" tendon2="payout1" polycoef="0.649793385 1 0 0 0"/>
+    <tendon name="eq_cable2" tendon1="cable2" tendon2="payout2" polycoef="0.648494728 1 0 0 0"/>
+    <tendon name="eq_cable3" tendon1="cable3" tendon2="payout3" polycoef="0.649793927 1 0 0 0"/>
+    <tendon name="eq_cable4" tendon1="cable4" tendon2="payout4" polycoef="0.648494837 1 0 0 0"/>
+    <tendon name="eq_cable5" tendon1="cable5" tendon2="payout5" polycoef="0.649793927 1 0 0 0"/>
+    <tendon name="eq_cable6" tendon1="cable6" tendon2="payout6" polycoef="0.648494837 1 0 0 0"/>
+  </equality>
+
+  <actuator>
+    <motor name="m1" joint="spool1" gear="1" ctrllimited="true" ctrlrange="-10 10" />
+    <motor name="m2" joint="spool2" gear="1" ctrllimited="true" ctrlrange="-10 10" />
+    <motor name="m3" joint="spool3" gear="1" ctrllimited="true" ctrlrange="-10 10" />
+    <motor name="m4" joint="spool4" gear="1" ctrllimited="true" ctrlrange="-10 10" />
+    <motor name="m5" joint="spool5" gear="1" ctrllimited="true" ctrlrange="-10 10" />
+    <motor name="m6" joint="spool6" gear="1" ctrllimited="true" ctrlrange="-10 10" />
+  </actuator>
+</mujoco>
+
