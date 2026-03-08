@@ -22,7 +22,6 @@ from jugglebot.core.robot_server import (
     tcp_command_server,
     axes_state_logger,
 )
-from jugglebot.drivers.hardware_driver import HardwareDriver
 from jugglebot.drivers.simulation_driver import SimulationDriver
 from jugglebot.config import load_config
 
