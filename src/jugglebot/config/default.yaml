@@ -3,6 +3,7 @@ robot:
   control_rate_hz: 500
   units: SI
   mode: simulation  # or 'hardware'
+  auto_enable_on_startup: false
 
 geometry:
   anchor_points: [...]

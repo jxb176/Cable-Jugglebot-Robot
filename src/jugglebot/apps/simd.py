@@ -39,6 +39,11 @@ def main():
         action="store_true",
         help="Enable MuJoCo viewer for visualization"
     )
+    parser.add_argument(
+        "--auto-enable",
+        action="store_true",
+        help="Start simulation in enabled state immediately"
+    )
     args = parser.parse_args()
 
     # Load configuration
@@ -68,6 +73,11 @@ def main():
     driver = SimulationDriver(axis_ids=axis_ids, enable_viewer=args.viewer)
     sim_bridge = ControlBridge(state, driver)
     sim_bridge.start()
+
+    auto_enable = bool(args.auto_enable or config.get("robot", {}).get("auto_enable_on_startup", False))
+    if auto_enable:
+        state.set_state("enable")
+        logger.info("Auto-enable on startup is active")
 
     # Start TCP command server
     tcp_thread = threading.Thread(
