@@ -8,6 +8,7 @@ import logging
 from datetime import datetime
 import subprocess
 import math
+import numpy as np
 # --- Cable IK ---
 from jugglebot.core.cable_ik import (
     CableRobotGeometry,
@@ -41,6 +42,14 @@ TORQUE_CTRL_KD_N_PER_MMPS = 0.02
 TORQUE_CTRL_BIAS_N = 12.0
 TORQUE_CTRL_MIN_N = 0.0
 TORQUE_CTRL_MAX_N = 180.0
+TASK_KP = np.diag([1200.0, 1200.0, 1800.0, 120.0, 120.0])
+TASK_KD = np.diag([80.0, 80.0, 120.0, 20.0, 20.0])
+TASK_TMIN_N = 0.0
+TASK_TMAX_N = 180.0
+TASK_ALLOC_LAMBDA = 1e-2
+TASK_ALLOC_ITERS = 80
+TASK_ALLOC_ALPHA = 0.7
+TASK_GRAVITY_FF_Z_N = 1.2
 
 #CLEANUP into ODRIVE library
 # ODrive controller modes (CANSimple Set_Controller_Mode)
@@ -113,6 +122,84 @@ def mm_to_turns(mm_list, cal: WinchCalibration = DEFAULT_WINCH_CAL):
         motor_turns = spool_turns * float(cal.gear_ratio[i])
         out.append(float(cal.sign[i]) * motor_turns)
     return out
+
+
+def quat_to_rpy_rad(q):
+    """Convert quaternion (w,x,y,z) to roll/pitch/yaw radians."""
+    w, x, y, z = q_norm((float(q[0]), float(q[1]), float(q[2]), float(q[3])))
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+
+    sinp = 2.0 * (w * y - z * x)
+    if abs(sinp) >= 1.0:
+        pitch = math.copysign(math.pi / 2.0, sinp)
+    else:
+        pitch = math.asin(sinp)
+
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+    return roll, pitch, yaw
+
+
+def pose5_to_tq_mm(pose5):
+    """Map [x_m, y_m, z_m, roll_rad, pitch_rad] -> (t_mm, q with yaw=0)."""
+    x_m, y_m, z_m, roll_rad, pitch_rad = [float(v) for v in pose5]
+    t_mm = (1000.0 * x_m, 1000.0 * y_m, 1000.0 * z_m)
+    q = quat_from_rpy_deg(math.degrees(roll_rad), math.degrees(pitch_rad), 0.0)
+    return t_mm, q
+
+
+def cable_lengths_m_from_pose5(pose5):
+    t_mm, q = pose5_to_tq_mm(pose5)
+    L_mm = pose_to_cable_lengths_mm(GEOM, t_mm, q)
+    return np.asarray(L_mm, dtype=float) / 1000.0
+
+
+def cable_lengths_jacobian_pose5_fd(pose5, eps_pos_m=1e-4, eps_ang_rad=1e-4):
+    """
+    Finite-difference Jacobian of cable lengths wrt [x,y,z,roll,pitch].
+    Returns J shape (6,5), where J[i,j] = dL_i / d pose_j.
+    """
+    q0 = np.asarray(pose5, dtype=float).copy()
+    J = np.zeros((6, 5), dtype=float)
+    for j in range(5):
+        dq = np.zeros(5, dtype=float)
+        dq[j] = eps_pos_m if j < 3 else eps_ang_rad
+        Lp = cable_lengths_m_from_pose5(q0 + dq)
+        Lm = cable_lengths_m_from_pose5(q0 - dq)
+        J[:, j] = (Lp - Lm) / (2.0 * dq[j])
+    return J
+
+
+def solve_tensions_least_squares(J_len_plat, tau_plat_des, T_prev):
+    """
+    Solve:
+      min_T || (-J^T)T - tau ||^2 + lambda ||T - Tref||^2
+      s.t. Tmin <= T <= Tmax
+    """
+    J = np.asarray(J_len_plat, dtype=float)
+    A = J.T
+    tau = np.asarray(tau_plat_des, dtype=float)
+    nt = A.shape[1]
+
+    lb = np.full(nt, TASK_TMIN_N, dtype=float)
+    ub = np.full(nt, TASK_TMAX_N, dtype=float)
+    if T_prev is None:
+        Tref = lb.copy()
+    else:
+        Tref = TASK_ALLOC_ALPHA * np.asarray(T_prev, dtype=float) + (1.0 - TASK_ALLOC_ALPHA) * lb
+
+    T = Tref.copy()
+    ATA = A.T @ A
+    L = float(np.linalg.norm(ATA, 2) + TASK_ALLOC_LAMBDA)
+    step = 1.0 / max(L, 1e-9)
+
+    for _ in range(TASK_ALLOC_ITERS):
+        grad = 2.0 * (A.T @ (A @ T - tau)) + 2.0 * TASK_ALLOC_LAMBDA * (T - Tref)
+        T = np.clip(T - step * grad, lb, ub)
+    return T
 
 def _coerce_vec6_to_mm(msg, field_name: str):
     vec = msg.get(field_name, [])
@@ -690,6 +777,7 @@ class ControlBridge(threading.Thread):
         self.driver = driver
         self.axis_ids = axis_ids or [0, 1, 2, 3, 4, 5]
         self._stop = threading.Event()
+        self._T_prev = None
 
         #Apply the current state version to avoid auto applying the default by setting these to -1.  Perhaps reconsider this for desired auto init behavior later on
         self._applied_state_version = state.get_state_version()
@@ -744,32 +832,10 @@ class ControlBridge(threading.Thread):
                 # Stream setpoints if enabled
                 if st == "enable":
                     try:
-                        t_mm, q = self.state.get_hand_pose()
-                        # Compute desired cable-length deltas (mm) from commanded hand pose.
-                        cable_mm = pose_to_cable_lengths_mm(GEOM, t_mm, q)
-                        cmd_mm = [cable_mm[i] - HOME_CABLE_MM[i] for i in range(6)]
-                        fb_pos_turns = self.state.get_pos_fbk()
-                        fb_vel_turnsps = self.state.get_vel_fbk()
-
-                        # Cable-space PD + bias tension -> spool torque command.
-                        for i, aid in enumerate(self.axis_ids):
-                            p_turns = fb_pos_turns[i] if i < len(fb_pos_turns) else None
-                            v_turnsps = fb_vel_turnsps[i] if i < len(fb_vel_turnsps) else None
-                            if p_turns is None or v_turnsps is None:
-                                self.driver.set_axis_torque(aid, 0.0)
-                                continue
-
-                            fb_mm = float(p_turns) * MM_PER_TURN[i]
-                            fb_mmps = float(v_turnsps) * MM_PER_TURN[i]
-                            err_mm = float(cmd_mm[i]) - fb_mm
-                            tension_N = (
-                                TORQUE_CTRL_BIAS_N
-                                + TORQUE_CTRL_KP_N_PER_MM * err_mm
-                                - TORQUE_CTRL_KD_N_PER_MMPS * fb_mmps
-                            )
-                            tension_N = max(TORQUE_CTRL_MIN_N, min(TORQUE_CTRL_MAX_N, tension_N))
-                            torque_nm = float(tension_N) * TORQUE_PER_TENSION
-                            self.driver.set_axis_torque(aid, torque_nm)
+                        if hasattr(self.driver, "get_platform_state"):
+                            self._run_taskspace_torque_control()
+                        else:
+                            self._run_cablespace_fallback_control()
 
                     except Exception as e:
                         # IMPORTANT: don't kill the bridge if IK/units blow up
@@ -805,6 +871,75 @@ class ControlBridge(threading.Thread):
                 except Exception:
                     pass
             logger.info("[CTRL] Bridge stopped")
+
+    def _run_taskspace_torque_control(self):
+        """Task-space controller with Jacobian-based tension allocation."""
+        t_mm_cmd, q_cmd = self.state.get_hand_pose()
+        roll_cmd, pitch_cmd, _ = quat_to_rpy_rad(q_cmd)
+        q_ref = np.array(
+            [t_mm_cmd[0] / 1000.0, t_mm_cmd[1] / 1000.0, t_mm_cmd[2] / 1000.0, roll_cmd, pitch_cmd],
+            dtype=float,
+        )
+        qd_ref = np.zeros(5, dtype=float)
+
+        q_cur, qd_cur = self.driver.get_platform_state()
+        if q_cur is None or qd_cur is None:
+            self._run_cablespace_fallback_control()
+            return
+        q_cur = np.asarray(q_cur, dtype=float)
+        qd_cur = np.asarray(qd_cur, dtype=float)
+
+        e = q_ref - q_cur
+        ed = qd_ref - qd_cur
+        qdd_cmd = TASK_KP @ e + TASK_KD @ ed
+
+        if hasattr(self.driver, "compute_platform_wrench"):
+            tau_plat_des = np.asarray(self.driver.compute_platform_wrench(qdd_cmd), dtype=float)
+        else:
+            tau_plat_des = np.asarray(qdd_cmd, dtype=float)
+            tau_plat_des[2] += TASK_GRAVITY_FF_Z_N
+
+        if hasattr(self.driver, "get_cable_jacobian_plat"):
+            J_len_plat = np.asarray(self.driver.get_cable_jacobian_plat(), dtype=float)
+        else:
+            J_len_plat = cable_lengths_jacobian_pose5_fd(q_cur)
+
+        T_des = solve_tensions_least_squares(J_len_plat, tau_plat_des, self._T_prev)
+        self._T_prev = T_des.copy()
+
+        tau_cmd = TORQUE_PER_TENSION * T_des
+        for i, aid in enumerate(self.axis_ids):
+            self.driver.set_axis_torque(aid, float(tau_cmd[i]))
+
+    def _run_cablespace_fallback_control(self):
+        """
+        Fallback controller for drivers without platform-state feedback:
+        cable-space PD + bias tension.
+        """
+        t_mm, q = self.state.get_hand_pose()
+        cable_mm = pose_to_cable_lengths_mm(GEOM, t_mm, q)
+        cmd_mm = [cable_mm[i] - HOME_CABLE_MM[i] for i in range(6)]
+        fb_pos_turns = self.state.get_pos_fbk()
+        fb_vel_turnsps = self.state.get_vel_fbk()
+
+        for i, aid in enumerate(self.axis_ids):
+            p_turns = fb_pos_turns[i] if i < len(fb_pos_turns) else None
+            v_turnsps = fb_vel_turnsps[i] if i < len(fb_vel_turnsps) else None
+            if p_turns is None or v_turnsps is None:
+                self.driver.set_axis_torque(aid, 0.0)
+                continue
+
+            fb_mm = float(p_turns) * MM_PER_TURN[i]
+            fb_mmps = float(v_turnsps) * MM_PER_TURN[i]
+            err_mm = float(cmd_mm[i]) - fb_mm
+            tension_N = (
+                TORQUE_CTRL_BIAS_N
+                + TORQUE_CTRL_KP_N_PER_MM * err_mm
+                - TORQUE_CTRL_KD_N_PER_MMPS * fb_mmps
+            )
+            tension_N = max(TORQUE_CTRL_MIN_N, min(TORQUE_CTRL_MAX_N, tension_N))
+            torque_nm = float(tension_N) * TORQUE_PER_TENSION
+            self.driver.set_axis_torque(aid, torque_nm)
 
     def _apply_state(self, st: str):
         """Apply high-level state to all axes."""
