@@ -72,7 +72,18 @@ def main():
     axis_ids = odrive_config.get("axis_ids", [0, 1, 2, 3, 4, 5])
 
     # Create hardware driver
-    driver = HardwareDriver(canbus=can_interface, axis_ids=axis_ids)
+    mm_per_turn = odrive_config.get("mm_per_turn", [-62.832] * len(axis_ids))
+    capstan_radius_m = float(config.get("geometry", {}).get("capstan_radius_m", 0.01))
+    torque_direction = float(odrive_config.get("torque_direction", 1.0))
+    pose_est_rate_hz = float(odrive_config.get("pose_est_rate_hz", 100.0))
+    driver = HardwareDriver(
+        canbus=can_interface,
+        axis_ids=axis_ids,
+        mm_per_turn=mm_per_turn,
+        capstan_radius_m=capstan_radius_m,
+        torque_direction=torque_direction,
+        pose_est_rate_hz=pose_est_rate_hz,
+    )
     odrv_bridge = ControlBridge(state, driver)
     odrv_bridge.start()
 
