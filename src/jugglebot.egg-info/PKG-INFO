@@ -1,0 +1,25 @@
+Metadata-Version: 2.4
+Name: jugglebot
+Version: 0.1.0
+Summary: Modular robotics control framework for cable and Stewart platforms
+Author-email: Jon <you@example.com>
+License: MIT
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: numpy>=1.26
+Requires-Dist: pyyaml>=6.0
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: ruff; extra == "dev"
+Requires-Dist: black; extra == "dev"
+Requires-Dist: mypy; extra == "dev"
+Provides-Extra: sim
+Requires-Dist: mujoco; extra == "sim"
+Requires-Dist: matplotlib; extra == "sim"
+Provides-Extra: optimization
+Requires-Dist: osqp; extra == "optimization"
+Dynamic: license-file
+
+# Cable-Jugglebot-Robot
+Robot controller

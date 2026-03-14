@@ -1,0 +1,31 @@
+name: simple_throw
+command_rate_hz: 500
+start:
+  p: [0.0, 0.0, 0.0]
+  v: [0.0, 0.0, 0.0]
+  a: [0.0, 0.0, 0.0]
+segments:
+  - p: [0.0, 0.0, -0.2]
+    v: [0.0, 0.0, 0.0]
+    time_law: s_curve
+    accel_ref: 5.0
+    jerk_ref: 500.0
+
+  - p: [0.0, 0.0, 0.0]
+    v: [0.0, 0.0, 4.9]
+    time_law: s_curve_monotonic
+    accel_ref: 50.0
+    jerk_ref: 2000.0
+
+  - p: [0.0, 0.0, 0.2]
+    v: [0.0, 0.0, 0.0]
+    time_law: s_curve_monotonic
+    accel_ref: 50.0
+    jerk_ref: 2000.0
+
+  - p: [0.0, 0.0, 0.0]
+    v: [0.0, 0.0, 0.0]
+    time_law: s_curve
+    accel_ref: 20.0
+    jerk_ref: 1000.0
+    v_max: 1.0
