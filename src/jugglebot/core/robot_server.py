@@ -334,6 +334,10 @@ class RobotState:
         self.hand_v_mps = (0.0, 0.0, 0.0)
         self.hand_a_mps2 = (0.0, 0.0, 0.0)
         self.hand_version = 0
+        self.hand_est_t_mm = (float("nan"), float("nan"), float("nan"))
+        self.hand_est_q = (1.0, 0.0, 0.0, 0.0)
+        self.hand_est_v_mps = (float("nan"), float("nan"), float("nan"))
+        self.hand_est_w_rps = (float("nan"), float("nan"), float("nan"))
         self.pose_profile = []  # list of [t, x_mm, y_mm, z_mm, roll_deg, pitch_deg, yaw_deg]
         self.control_time_s = None
 
@@ -359,6 +363,23 @@ class RobotState:
     def get_hand_motion(self):
         with self.lock:
             return self.hand_t_mm, self.hand_q, self.hand_v_mps, self.hand_a_mps2
+
+    def set_hand_estimate(self, t_mm, q, v_mps=None, w_rps=None):
+        with self.lock:
+            self.hand_est_t_mm = (float(t_mm[0]), float(t_mm[1]), float(t_mm[2]))
+            self.hand_est_q = q_norm((float(q[0]), float(q[1]), float(q[2]), float(q[3])))
+            if v_mps is None:
+                self.hand_est_v_mps = (float("nan"), float("nan"), float("nan"))
+            else:
+                self.hand_est_v_mps = (float(v_mps[0]), float(v_mps[1]), float(v_mps[2]))
+            if w_rps is None:
+                self.hand_est_w_rps = (float("nan"), float("nan"), float("nan"))
+            else:
+                self.hand_est_w_rps = (float(w_rps[0]), float(w_rps[1]), float(w_rps[2]))
+
+    def get_hand_estimate(self):
+        with self.lock:
+            return self.hand_est_t_mm, self.hand_est_q, self.hand_est_v_mps, self.hand_est_w_rps
 
     def get_hand_version(self):
         with self.lock:
@@ -952,6 +973,13 @@ class ControlBridge(threading.Thread):
 
                 # light heartbeat log
                 now = time.perf_counter()
+                if hasattr(self.driver, "get_platform_state"):
+                    try:
+                        q_cur, qd_cur = self.driver.get_platform_state()
+                        if q_cur is not None and qd_cur is not None:
+                            self._publish_platform_estimate(q_cur, qd_cur)
+                    except Exception:
+                        pass
                 self._update_sim_timing(now)
                 if self._diag_writer is not None and (now - self._diag_last_log_perf) >= (1.0 / self.diag_log_hz):
                     self._write_diag_row(now)
@@ -997,6 +1025,7 @@ class ControlBridge(threading.Thread):
         if q_cur is None or qd_cur is None:
             self._run_cablespace_fallback_control()
             return
+        self._publish_platform_estimate(q_cur, qd_cur)
         q_cur = np.asarray(q_cur, dtype=float)
         qd_cur = np.asarray(qd_cur, dtype=float)
 
@@ -1074,6 +1103,23 @@ class ControlBridge(threading.Thread):
             tension_cmd[i] = float(tension_N)
         self._last_torque_cmd_nm = [float(x) for x in torque_cmd]
         self._last_tension_cmd_N = [float(x) for x in tension_cmd]
+
+    def _publish_platform_estimate(self, q_cur, qd_cur):
+        """
+        Publish platform estimate into RobotState for GUI telemetry.
+        q_cur: [x,y,z,roll,pitch] in SI units.
+        qd_cur: [xd,yd,zd,rolld,pitchd] in SI units.
+        """
+        try:
+            q_cur = np.asarray(q_cur, dtype=float)
+            qd_cur = np.asarray(qd_cur, dtype=float)
+            t_mm = (1000.0 * float(q_cur[0]), 1000.0 * float(q_cur[1]), 1000.0 * float(q_cur[2]))
+            q_est = quat_from_rpy_deg(math.degrees(float(q_cur[3])), math.degrees(float(q_cur[4])), 0.0)
+            v_mps = (float(qd_cur[0]), float(qd_cur[1]), float(qd_cur[2]))
+            w_rps = (float(qd_cur[3]), float(qd_cur[4]), 0.0)
+            self.state.set_hand_estimate(t_mm, q_est, v_mps=v_mps, w_rps=w_rps)
+        except Exception:
+            pass
 
     def _apply_state(self, st: str):
         """Apply high-level state to all axes."""
@@ -1436,6 +1482,8 @@ def udp_telemetry_sender(state: RobotState, udp_sock, stop_event):
                 temp_motor = state.get_temp_motor() or []
                 axis_state = state.get_axis_state() or []
                 axis_error = state.get_axis_error() or []
+                hand_est_t_mm, hand_est_q, hand_est_v_mps, hand_est_w_rps = state.get_hand_estimate()
+                hand_est_roll, hand_est_pitch, hand_est_yaw = quat_to_rpy_rad(hand_est_q)
                 msg = {
                     "t": time.time(),
                     "pos": fb_pos_mm,
@@ -1447,6 +1495,22 @@ def udp_telemetry_sender(state: RobotState, udp_sock, stop_event):
                     "temp_motor": [None if x is None else float(x) for x in temp_motor],
                     "axis_state": [None if x is None else int(x) for x in axis_state],
                     "axis_error": [None if x is None else int(x) for x in axis_error],
+                    "hand_est_pose": [
+                        float(hand_est_t_mm[0]),
+                        float(hand_est_t_mm[1]),
+                        float(hand_est_t_mm[2]),
+                        math.degrees(float(hand_est_roll)),
+                        math.degrees(float(hand_est_pitch)),
+                        math.degrees(float(hand_est_yaw)),
+                    ],
+                    "hand_est_vel": [
+                        float(hand_est_v_mps[0]),
+                        float(hand_est_v_mps[1]),
+                        float(hand_est_v_mps[2]),
+                        math.degrees(float(hand_est_w_rps[0])),
+                        math.degrees(float(hand_est_w_rps[1])),
+                        math.degrees(float(hand_est_w_rps[2])),
+                    ],
                 }
                 udp_sock.sendto(json.dumps(msg).encode("utf-8"), controller_addr)
         except Exception as e:
