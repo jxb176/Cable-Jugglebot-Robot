@@ -36,3 +36,7 @@ optimization = [
 [project.scripts]
 robotd = "jugglebot.apps.robotd:main"
 simd = "jugglebot.apps.simd:main"
+plantraj = "jugglebot.apps.plantraj:main"
+playtraj = "jugglebot.apps.playtraj:main"
+reviewlog = "jugglebot.apps.reviewlog:main"
+controlui = "jugglebot.apps.controlui:main"

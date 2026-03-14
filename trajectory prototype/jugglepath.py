@@ -176,6 +176,8 @@ def _simulate_segments_1d(
     s = float(s0)
     v = float(v0)
     a = float(a0)
+    j0 = float(segments[0][0]) if segments else 0.0
+    rows.append([0.0, s, v, a, j0])
 
     for (j, dur) in segments:
         if dur <= 0:
@@ -187,7 +189,7 @@ def _simulate_segments_1d(
             t += dt_step
             rows.append([t, s, v, a, j])
 
-    return np.array(rows, dtype=float) if rows else np.zeros((0, 5), dtype=float)
+    return np.array(rows, dtype=float)
 
 
 # ============================================================
@@ -316,60 +318,68 @@ class LineDVNoCoastScaled(Primitive3D):
 
     def _choose_k_best_match(self, vs0: float, L: float) -> Tuple[float, float]:
         L = abs(float(L))
+        tol = 1e-9
 
         if not self.scale_accel and not self.scale_jerk:
             a_used, j_used = self._effective_refs(1.0)
             d_base, _, _ = _phase_distance_time(vs0, self.v1_along, a_used, j_used)
+            if abs(abs(d_base) - L) > tol:
+                raise ValueError("distance mismatch with fixed accel/jerk and no scaling")
             return 1.0, float(d_base)
 
         k_min = max(1e-12, self.k_min)
         k_max = max(k_min * 1.0001, self.k_max)
-        n = max(11, self.grid_points)
-
+        n = max(31, self.grid_points)
         ks = np.logspace(math.log10(k_min), math.log10(k_max), n)
-
-        best_k = float(ks[0])
-        best_err = float("inf")
-        best_d = 0.0
-
-        for k in ks:
-            a_used, j_used = self._effective_refs(float(k))
-            d_base, _, _ = _phase_distance_time(vs0, self.v1_along, a_used, j_used)
-            err = abs(abs(d_base) - L)
-            if err < best_err:
-                best_err = err
-                best_k = float(k)
-                best_d = float(d_base)
 
         def f(k: float) -> float:
             a_used, j_used = self._effective_refs(float(k))
             d_base, _, _ = _phase_distance_time(vs0, self.v1_along, a_used, j_used)
             return abs(d_base) - L
 
-        idx = int(np.argmin(np.abs(ks - best_k)))
-        lo = float(ks[max(0, idx - 1)])
-        hi = float(ks[min(len(ks) - 1, idx + 1)])
-        f_lo = f(lo)
-        f_hi = f(hi)
+        fs = []
+        best_k = float(ks[0])
+        best_abs = float("inf")
+        for k in ks:
+            fk = f(float(k))
+            fs.append(float(fk))
+            if abs(fk) < best_abs:
+                best_abs = abs(fk)
+                best_k = float(k)
 
-        k_used = best_k
-        if f_lo * f_hi < 0.0:
-            a = lo
-            b = hi
-            fa = f_lo
-            fb = f_hi
-            for _ in range(max(1, self.refine_bisect_iters)):
-                m = 0.5 * (a + b)
-                fm = f(m)
-                if fa * fm <= 0.0:
-                    b = m
-                    fb = fm
-                else:
-                    a = m
-                    fa = fm
-            k_used = 0.5 * (a + b)
+        if best_abs <= tol:
+            k_used = best_k
+        else:
+            bracket = None
+            for i in range(len(ks) - 1):
+                if fs[i] == 0.0:
+                    bracket = (float(ks[i]), float(ks[i]))
+                    break
+                if fs[i] * fs[i + 1] < 0.0:
+                    bracket = (float(ks[i]), float(ks[i + 1]))
+                    break
 
-        a_used, j_used = self._effective_refs(k_used)
+            if bracket is None:
+                raise ValueError("unable to satisfy segment distance within k range")
+
+            a, b = bracket
+            if a == b:
+                k_used = a
+            else:
+                fa, fb = f(a), f(b)
+                for _ in range(max(1, self.refine_bisect_iters)):
+                    m = 0.5 * (a + b)
+                    fm = f(m)
+                    if abs(fm) <= tol:
+                        a = b = m
+                        break
+                    if fa * fm <= 0.0:
+                        b, fb = m, fm
+                    else:
+                        a, fa = m, fm
+                k_used = 0.5 * (a + b)
+
+        a_used, j_used = self._effective_refs(float(k_used))
         d_base, _, _ = _phase_distance_time(vs0, self.v1_along, a_used, j_used)
         return float(k_used), float(d_base)
 
@@ -424,17 +434,15 @@ class LineDVNoCoastScaled(Primitive3D):
             end = State3D(p=p0.copy(), v=v0_parallel * u, a=np.zeros(3))
             return SegmentResult(traj=traj, end_state=end, info=info)
 
-        # force end to exactly p1 by shifting s
-
         s_end = float(samples[-1, 1])
-        if abs(s_end) < 1e-15:
-            raise ValueError("Profile generation failed (near-zero distance)")
-        scale = float(L / s_end)
-        samples[:, 1] *= scale  # s
-        samples[:, 2] *= scale  # sdot
-        samples[:, 3] *= scale  # sddot
-        samples[:, 4] *= scale  # sjerk
+        if abs(s_end - L) > 1e-6:
+            raise ValueError(f"distance mismatch after k solve: s_end={s_end:.9g}, L={L:.9g}")
+        v_end = float(samples[-1, 2])
+        if abs(v_end - self.v1_along) > 1e-6:
+            raise ValueError(f"endpoint velocity mismatch: v_end={v_end:.9g}, v1={self.v1_along:.9g}")
         samples[-1, 1] = float(L)
+        samples[-1, 2] = float(self.v1_along)
+        samples[-1, 3] = 0.0
         t = samples[:, 0]
         s = samples[:, 1]
         vs = samples[:, 2]
@@ -583,22 +591,14 @@ class LineSCurve(Primitive3D):
         if samp.shape[0] == 0:
             raise ValueError("degenerate profile")
 
-        # Make the sampled distance land exactly at L without changing the start point.
-        # IMPORTANT: Do NOT "shift" the whole s(t) curve (that moves the start away from 0 and
-        # causes visible overshoot/undershoot in 3D). Instead, scale s and its derivatives
-        # consistently (same approach you used in the Z-only playground).
         s_end = float(samp[-1, 1])
-        if abs(s_end) < 1e-15:
-            raise ValueError("Profile generation failed (near-zero distance)")
-        scale = float(L / s_end)
-
-        samp[:, 1] *= scale  # s
-        samp[:, 2] *= scale  # sdot
-        samp[:, 3] *= scale  # sddot
-        samp[:, 4] *= scale  # sjerk
-
-        # Tiny numerical cleanup
+        if abs(s_end - L) > 1e-6:
+            raise ValueError(f"distance mismatch in s_curve: s_end={s_end:.9g}, L={L:.9g}")
+        if abs(float(samp[-1, 2]) - v1) > 1e-6:
+            raise ValueError(f"endpoint velocity mismatch in s_curve: v_end={samp[-1,2]:.9g}, v1={v1:.9g}")
         samp[-1, 1] = float(L)
+        samp[-1, 2] = float(v1)
+        samp[-1, 3] = 0.0
 
         info = {
             "mode": mode,
@@ -804,6 +804,8 @@ class JugglePath:
             if L > 1e-9:
                 raise ValueError(
                     "WAIT segment requires no position change (next waypoint must equal current position).")
+            if np.linalg.norm(start_state.v) > 1e-6 or np.linalg.norm(start_state.a) > 1e-6:
+                raise ValueError("WAIT segment requires near-zero incoming velocity and acceleration.")
             return Wait(duration=T), extra_info
 
         if seg.time_law == "linear":
@@ -868,6 +870,11 @@ class JugglePath:
             r = prim.generate(start=cur, sample_hz=self.sample_hz)
 
             traj = r.traj.copy()
+            if traj.shape[0] > 0:
+                if np.linalg.norm(traj[0, 1:4] - cur.p) > 1e-8:
+                    raise ValueError(f"segment {i} start position discontinuity")
+                if np.linalg.norm(traj[0, 4:7] - cur.v) > 1e-6:
+                    raise ValueError(f"segment {i} start velocity discontinuity")
             traj[:, 0] += t_offset
 
             # De-dup boundary sample

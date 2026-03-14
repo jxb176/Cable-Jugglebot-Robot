@@ -80,3 +80,11 @@ class RobotDriver(ABC):
     def set_heartbeat_callback(self, callback: Callable[[int, int, int, int], None]):
         """Set callback for heartbeat feedback."""
         pass
+
+    def get_cable_tensions(self):
+        """Optional: return per-cable tension feedback [N] as length-6 list, or None."""
+        return None
+
+    def get_axis_torques(self):
+        """Optional: return per-axis applied torque feedback [Nm] as length-6 list, or None."""
+        return None

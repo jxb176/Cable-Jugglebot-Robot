@@ -4,6 +4,7 @@ import json
 import time
 import threading
 import os
+import csv
 import logging
 from datetime import datetime
 import subprocess
@@ -42,14 +43,20 @@ TORQUE_CTRL_KD_N_PER_MMPS = 0.02
 TORQUE_CTRL_BIAS_N = 12.0
 TORQUE_CTRL_MIN_N = 0.0
 TORQUE_CTRL_MAX_N = 180.0
-TASK_KP = np.diag([1200.0, 1200.0, 1800.0, 120.0, 120.0])
-TASK_KD = np.diag([80.0, 80.0, 120.0, 20.0, 20.0])
-TASK_TMIN_N = 0.0
+TASK_KP = np.diag([1200.0, 1200.0, 1800.0, 120000.0, 120000.0])
+TASK_KD = np.diag([80.0, 80.0, 120.0, 0.0, 0.0])
+TASK_KI = np.diag([0.0, 0.0, 0.0, 0.0, 0.0])
+TASK_INT_CLIP = np.array([0.0, 0.0, 0.0, 0.35, 0.35], dtype=float)
+TASK_TMIN_N = 5.0
 TASK_TMAX_N = 180.0
 TASK_ALLOC_LAMBDA = 1e-2
 TASK_ALLOC_ITERS = 80
 TASK_ALLOC_ALPHA = 0.7
 TASK_GRAVITY_FF_Z_N = 1.2
+# Wrench mapping sign convention for tension allocation.
+# +1.0 means tau = (+J^T)T, -1.0 means tau = (-J^T)T.
+# Keep +1.0 for current sim setup (stable empirically with existing signs/axes).
+TASK_WRENCH_FROM_TENSION_SIGN = +1.0
 
 #CLEANUP into ODRIVE library
 # ODrive controller modes (CANSimple Set_Controller_Mode)
@@ -176,11 +183,12 @@ def cable_lengths_jacobian_pose5_fd(pose5, eps_pos_m=1e-4, eps_ang_rad=1e-4):
 def solve_tensions_least_squares(J_len_plat, tau_plat_des, T_prev):
     """
     Solve:
-      min_T || (-J^T)T - tau ||^2 + lambda ||T - Tref||^2
+      min_T || (s*J^T)T - tau ||^2 + lambda ||T - Tref||^2
       s.t. Tmin <= T <= Tmax
+    where s = TASK_WRENCH_FROM_TENSION_SIGN.
     """
     J = np.asarray(J_len_plat, dtype=float)
-    A = J.T
+    A = float(TASK_WRENCH_FROM_TENSION_SIGN) * J.T
     tau = np.asarray(tau_plat_des, dtype=float)
     nt = A.shape[1]
 
@@ -323,23 +331,46 @@ class RobotState:
         # --- Hand (platform) command in global coordinates (mm + quaternion) ---
         self.hand_t_mm = (0.0, 0.0, 0.0)
         self.hand_q = (1.0, 0.0, 0.0, 0.0)
+        self.hand_v_mps = (0.0, 0.0, 0.0)
+        self.hand_a_mps2 = (0.0, 0.0, 0.0)
         self.hand_version = 0
         self.pose_profile = []  # list of [t, x_mm, y_mm, z_mm, roll_deg, pitch_deg, yaw_deg]
+        self.control_time_s = None
 
-    def set_hand_pose(self, t_mm, q):
+    def set_hand_pose(self, t_mm, q, v_mps=None, a_mps2=None):
         # t_mm: (x,y,z) in mm, q: quaternion (w,x,y,z)
         with self.lock:
             self.hand_t_mm = (float(t_mm[0]), float(t_mm[1]), float(t_mm[2]))
             self.hand_q = q_norm((float(q[0]), float(q[1]), float(q[2]), float(q[3])))
+            if v_mps is None:
+                self.hand_v_mps = (0.0, 0.0, 0.0)
+            else:
+                self.hand_v_mps = (float(v_mps[0]), float(v_mps[1]), float(v_mps[2]))
+            if a_mps2 is None:
+                self.hand_a_mps2 = (0.0, 0.0, 0.0)
+            else:
+                self.hand_a_mps2 = (float(a_mps2[0]), float(a_mps2[1]), float(a_mps2[2]))
             self.hand_version += 1
 
     def get_hand_pose(self):
         with self.lock:
             return self.hand_t_mm, self.hand_q
 
+    def get_hand_motion(self):
+        with self.lock:
+            return self.hand_t_mm, self.hand_q, self.hand_v_mps, self.hand_a_mps2
+
     def get_hand_version(self):
         with self.lock:
             return int(self.hand_version)
+
+    def set_control_time_s(self, t_s):
+        with self.lock:
+            self.control_time_s = None if t_s is None else float(t_s)
+
+    def get_control_time_s(self):
+        with self.lock:
+            return self.control_time_s
 
     def set_controller_ip(self, ip):
         with self.lock:
@@ -554,16 +585,33 @@ class RobotState:
     # Pose Profile methods
     def set_pose_profile(self, profile_pose: list):
         """
-        profile_pose rows: [t, x_mm, y_mm, z_mm, roll_deg, pitch_deg, yaw_deg]
-        Stored as list[(t, [6])] similar shape to axis profile.
+        profile_pose rows support:
+          [t, x_mm, y_mm, z_mm, roll_deg, pitch_deg, yaw_deg]
+        or
+          [t, x_mm, y_mm, z_mm, vx_mps, vy_mps, vz_mps, ax_mps2, ay_mps2, az_mps2, roll_deg, pitch_deg, yaw_deg]
+        Stored as list[(t, pose6, v3, a3)].
         """
         norm = []
         for row in profile_pose:
             if not isinstance(row, (list, tuple)) or len(row) < 7:
                 raise ValueError("each pose profile row must be [t, x,y,z,roll,pitch,yaw]")
             t = float(row[0])
-            vals = [float(x) for x in row[1:7]]
-            norm.append((t, vals))
+            if len(row) >= 13:
+                pose6 = [
+                    float(row[1]),
+                    float(row[2]),
+                    float(row[3]),
+                    float(row[10]),
+                    float(row[11]),
+                    float(row[12]),
+                ]
+                v3 = [float(row[4]), float(row[5]), float(row[6])]
+                a3 = [float(row[7]), float(row[8]), float(row[9])]
+            else:
+                pose6 = [float(x) for x in row[1:7]]
+                v3 = [0.0, 0.0, 0.0]
+                a3 = [0.0, 0.0, 0.0]
+            norm.append((t, pose6, v3, a3))
         with self.lock:
             self.pose_profile = norm
         logger.info(f"Pose profile uploaded with {len(norm)} points")
@@ -693,7 +741,7 @@ class PoseProfilePlayer(threading.Thread):
     Converts pose -> quaternion -> IK -> axis mm commands, then calls state.set_axes(mm).
     """
 
-    def __init__(self, state: RobotState, profile: list[tuple[float, list[float]]], rate_hz: float):
+    def __init__(self, state: RobotState, profile, rate_hz: float):
         super().__init__(daemon=True)
         self.state = state
         self._stop = threading.Event()
@@ -706,44 +754,68 @@ class PoseProfilePlayer(threading.Thread):
 
         t0 = float(profile[0][0])
         norm = []
-        for t, pose6 in profile:
-            norm.append((float(t) - t0, [float(x) for x in pose6]))
+        for row in profile:
+            t = float(row[0])
+            if len(row) >= 4:
+                pose6 = [float(x) for x in row[1]]
+                v3 = [float(x) for x in row[2]]
+                a3 = [float(x) for x in row[3]]
+            else:
+                pose6 = [float(x) for x in row[1]]
+                v3 = [0.0, 0.0, 0.0]
+                a3 = [0.0, 0.0, 0.0]
+            norm.append((float(t) - t0, pose6, v3, a3))
         self.norm_profile = norm
         self.duration = norm[-1][0] if norm else 0.0
+        self._wall_start = None
+        self._control_start = None
 
     def stop(self):
         self._stop.set()
 
+    def _profile_elapsed_s(self):
+        control_now = self.state.get_control_time_s()
+        if control_now is not None:
+            if self._control_start is None:
+                self._control_start = float(control_now)
+            return float(control_now) - self._control_start
+        if self._wall_start is None:
+            self._wall_start = time.perf_counter()
+        return time.perf_counter() - self._wall_start
+
     def run(self):
         if self.duration <= 0.0:
-            self._apply_pose(self.norm_profile[-1][1])
+            _, pose6, v3, a3 = self.norm_profile[-1]
+            self._apply_pose(pose6, v3, a3)
             logger.info("[POSE_PROFILE] Zero-duration pose profile applied")
             return
 
         logger.info(f"[POSE_PROFILE] Starting playback at {1.0/self.dt:.1f} Hz, duration {self.duration:.3f}s")
-        start = time.perf_counter()
         k = 0
 
         while not self._stop.is_set():
-            t = time.perf_counter() - start
+            t = self._profile_elapsed_s()
             if t >= self.duration:
-                self._apply_pose(self.norm_profile[-1][1])
+                _, pose6, v3, a3 = self.norm_profile[-1]
+                self._apply_pose(pose6, v3, a3)
                 logger.info("[POSE_PROFILE] Completed")
                 break
 
             while k + 1 < len(self.norm_profile) and self.norm_profile[k + 1][0] <= t:
                 k += 1
 
-            t0, p0 = self.norm_profile[k]
-            t1, p1 = self.norm_profile[min(k + 1, len(self.norm_profile) - 1)]
+            t0, p0, v0, a0 = self.norm_profile[k]
+            t1, p1, v1, a1 = self.norm_profile[min(k + 1, len(self.norm_profile) - 1)]
             if t1 <= t0:
                 alpha = 0.0
             else:
                 alpha = max(0.0, min(1.0, (t - t0) / (t1 - t0)))
 
             pose = [p0[i] + alpha * (p1[i] - p0[i]) for i in range(6)]
+            vel = [v0[i] + alpha * (v1[i] - v0[i]) for i in range(3)]
+            acc = [a0[i] + alpha * (a1[i] - a0[i]) for i in range(3)]
             try:
-                self._apply_pose(pose)
+                self._apply_pose(pose, vel, acc)
             except Exception as e:
                 logger.error(f"[POSE_PROFILE] apply_pose error: {e}")
 
@@ -754,7 +826,7 @@ class PoseProfilePlayer(threading.Thread):
             if self.state.player_thread is self:
                 self.state.player_thread = None
 
-    def _apply_pose(self, pose6):
+    def _apply_pose(self, pose6, vel3=None, acc3=None):
         x_mm, y_mm, z_mm, roll_deg, pitch_deg, yaw_deg = pose6
 
         # You already have quat_from_rpy_deg, and you already handle pose commands similarly. :contentReference[oaicite:7]{index=7}
@@ -762,7 +834,7 @@ class PoseProfilePlayer(threading.Thread):
 
         # Reuse your existing "pose -> IK -> axes" path
         # If your RobotState.set_hand_pose() already runs IK and updates axis commands, call it:
-        self.state.set_hand_pose((x_mm, y_mm, z_mm), q)
+        self.state.set_hand_pose((x_mm, y_mm, z_mm), q, v_mps=vel3, a_mps2=acc3)
 
         # If set_hand_pose currently only stores pose and doesn't compute IK yet,
         # then instead call your cable_ik conversion here (whatever function you wired in).
@@ -771,13 +843,30 @@ class PoseProfilePlayer(threading.Thread):
 class ControlBridge(threading.Thread):
     """Bridge between RobotState and robot driver (hardware or simulation)."""
 
-    def __init__(self, state: RobotState, driver, axis_ids=None):
+    def __init__(self, state: RobotState, driver, axis_ids=None, diag_log_dir: str | None = None, diag_log_hz: float = 100.0):
         super().__init__(daemon=True)
         self.state = state
         self.driver = driver
         self.axis_ids = axis_ids or [0, 1, 2, 3, 4, 5]
         self._stop = threading.Event()
         self._T_prev = None
+        self._task_err_int = np.zeros(5, dtype=float)
+        self._task_last_t = None
+        self.diag_log_dir = diag_log_dir or os.path.join(os.getcwd(), "Logs")
+        self.diag_log_hz = max(1.0, float(diag_log_hz))
+        self._diag_file = None
+        self._diag_writer = None
+        self._diag_log_path = None
+        self._diag_start_perf = None
+        self._diag_last_log_perf = 0.0
+        self._last_spool_cmd_mm = [float("nan")] * 6
+        self._last_torque_cmd_nm = [0.0] * 6
+        self._last_tension_cmd_N = [0.0] * 6
+        self._last_tau_plat_des = np.full(5, np.nan, dtype=float)
+        self._sim_time_s = float("nan")
+        self._sim_rt_factor = float("nan")
+        self._sim_time_prev = None
+        self._sim_wall_prev = None
 
         #Apply the current state version to avoid auto applying the default by setting these to -1.  Perhaps reconsider this for desired auto init behavior later on
         self._applied_state_version = state.get_state_version()
@@ -797,6 +886,7 @@ class ControlBridge(threading.Thread):
         try:
             # Start the driver
             self.driver.start()
+            self._open_diag_log()
 
             # Set up callbacks
             self.driver.set_position_callback(lambda aid, pos: self.state.set_axis_feedback(aid, pos_estimate=pos))
@@ -842,22 +932,38 @@ class ControlBridge(threading.Thread):
                         logger.error(f"[CTRL] ENABLE streaming error: {e}")
 
                 elif st == "pretension":
+                    self._last_tau_plat_des[:] = np.nan
                     upper_N, lower_N = self.state.get_pretension()
 
                     # Map upper/lower tension to per-axis torque commands
                     torque_cmd = [0.0] * 6
+                    tension_cmd = [0.0] * 6
                     for i in (0, 2, 4):
+                        tension_cmd[i] = upper_N
                         torque_cmd[i] = upper_N * TORQUE_PER_TENSION
                     for i in (1, 3, 5):
+                        tension_cmd[i] = lower_N
                         torque_cmd[i] = lower_N * TORQUE_PER_TENSION
 
                     for i, aid in enumerate(self.axis_ids):
                         self.driver.set_axis_torque(aid, torque_cmd[i])
+                    self._last_tension_cmd_N = [float(x) for x in tension_cmd]
+                    self._last_torque_cmd_nm = [float(x) for x in torque_cmd]
 
                 # light heartbeat log
                 now = time.perf_counter()
+                self._update_sim_timing(now)
+                if self._diag_writer is not None and (now - self._diag_last_log_perf) >= (1.0 / self.diag_log_hz):
+                    self._write_diag_row(now)
+                    self._diag_last_log_perf = now
                 if now - last_log >= 1.0:
-                    logger.info(f"[CTRL] streaming {len(self.axis_ids)} axes, state={st}")
+                    if np.isfinite(self._sim_time_s) and np.isfinite(self._sim_rt_factor):
+                        logger.info(
+                            f"[CTRL] streaming {len(self.axis_ids)} axes, state={st}, "
+                            f"sim_time={self._sim_time_s:.3f}s, rt_factor={self._sim_rt_factor:.3f}x"
+                        )
+                    else:
+                        logger.info(f"[CTRL] streaming {len(self.axis_ids)} axes, state={st}")
                     last_log = now
 
                 time.sleep(0.002)  # ~500 Hz
@@ -865,6 +971,7 @@ class ControlBridge(threading.Thread):
         except Exception as e:
             logger.error(f"[CTRL] Bridge error: {e}")
         finally:
+            self._close_diag_log()
             if self.driver:
                 try:
                     self.driver.stop()
@@ -874,13 +981,17 @@ class ControlBridge(threading.Thread):
 
     def _run_taskspace_torque_control(self):
         """Task-space controller with Jacobian-based tension allocation."""
-        t_mm_cmd, q_cmd = self.state.get_hand_pose()
+        t_mm_cmd, q_cmd, v_cmd_mps, a_cmd_mps2 = self.state.get_hand_motion()
+        cable_mm = pose_to_cable_lengths_mm(GEOM, t_mm_cmd, q_cmd)
+        cmd_mm = [cable_mm[i] - HOME_CABLE_MM[i] for i in range(6)]
+        self._last_spool_cmd_mm = [float(x) for x in cmd_mm]
         roll_cmd, pitch_cmd, _ = quat_to_rpy_rad(q_cmd)
         q_ref = np.array(
             [t_mm_cmd[0] / 1000.0, t_mm_cmd[1] / 1000.0, t_mm_cmd[2] / 1000.0, roll_cmd, pitch_cmd],
             dtype=float,
         )
-        qd_ref = np.zeros(5, dtype=float)
+        qd_ref = np.array([float(v_cmd_mps[0]), float(v_cmd_mps[1]), float(v_cmd_mps[2]), 0.0, 0.0], dtype=float)
+        qdd_ff = np.array([float(a_cmd_mps2[0]), float(a_cmd_mps2[1]), float(a_cmd_mps2[2]), 0.0, 0.0], dtype=float)
 
         q_cur, qd_cur = self.driver.get_platform_state()
         if q_cur is None or qd_cur is None:
@@ -891,7 +1002,19 @@ class ControlBridge(threading.Thread):
 
         e = q_ref - q_cur
         ed = qd_ref - qd_cur
-        qdd_cmd = TASK_KP @ e + TASK_KD @ ed
+        now = time.perf_counter()
+        if self._task_last_t is None:
+            dt = 0.002
+        else:
+            dt = max(1e-4, min(0.05, now - self._task_last_t))
+        self._task_last_t = now
+
+        # Integrate only selected channels (roll/pitch by default), with anti-windup clipping.
+        self._task_err_int += e * dt
+        self._task_err_int = np.clip(self._task_err_int, -TASK_INT_CLIP, TASK_INT_CLIP)
+
+        qdd_fb = TASK_KP @ e + TASK_KD @ ed + TASK_KI @ self._task_err_int
+        qdd_cmd = qdd_ff + qdd_fb
 
         if hasattr(self.driver, "compute_platform_wrench"):
             tau_plat_des = np.asarray(self.driver.compute_platform_wrench(qdd_cmd), dtype=float)
@@ -904,10 +1027,13 @@ class ControlBridge(threading.Thread):
         else:
             J_len_plat = cable_lengths_jacobian_pose5_fd(q_cur)
 
+        self._last_tau_plat_des = np.asarray(tau_plat_des, dtype=float)
         T_des = solve_tensions_least_squares(J_len_plat, tau_plat_des, self._T_prev)
         self._T_prev = T_des.copy()
+        self._last_tension_cmd_N = [float(x) for x in T_des]
 
         tau_cmd = TORQUE_PER_TENSION * T_des
+        self._last_torque_cmd_nm = [float(x) for x in tau_cmd]
         for i, aid in enumerate(self.axis_ids):
             self.driver.set_axis_torque(aid, float(tau_cmd[i]))
 
@@ -916,11 +1042,15 @@ class ControlBridge(threading.Thread):
         Fallback controller for drivers without platform-state feedback:
         cable-space PD + bias tension.
         """
+        self._last_tau_plat_des[:] = np.nan
         t_mm, q = self.state.get_hand_pose()
         cable_mm = pose_to_cable_lengths_mm(GEOM, t_mm, q)
         cmd_mm = [cable_mm[i] - HOME_CABLE_MM[i] for i in range(6)]
+        self._last_spool_cmd_mm = [float(x) for x in cmd_mm]
         fb_pos_turns = self.state.get_pos_fbk()
         fb_vel_turnsps = self.state.get_vel_fbk()
+        torque_cmd = [0.0] * 6
+        tension_cmd = [0.0] * 6
 
         for i, aid in enumerate(self.axis_ids):
             p_turns = fb_pos_turns[i] if i < len(fb_pos_turns) else None
@@ -940,6 +1070,10 @@ class ControlBridge(threading.Thread):
             tension_N = max(TORQUE_CTRL_MIN_N, min(TORQUE_CTRL_MAX_N, tension_N))
             torque_nm = float(tension_N) * TORQUE_PER_TENSION
             self.driver.set_axis_torque(aid, torque_nm)
+            torque_cmd[i] = float(torque_nm)
+            tension_cmd[i] = float(tension_N)
+        self._last_torque_cmd_nm = [float(x) for x in torque_cmd]
+        self._last_tension_cmd_N = [float(x) for x in tension_cmd]
 
     def _apply_state(self, st: str):
         """Apply high-level state to all axes."""
@@ -958,6 +1092,12 @@ class ControlBridge(threading.Thread):
                 elif st in ("disable", "estop"):
                     self.driver.set_axis_state(aid, "idle")
                     logger.info(f"[CTRL] axis {aid}: IDLE")
+            if st in ("disable", "estop"):
+                self._last_torque_cmd_nm = [0.0] * 6
+                self._last_tension_cmd_N = [0.0] * 6
+                self._last_tau_plat_des[:] = np.nan
+                self._task_err_int[:] = 0.0
+                self._task_last_t = None
 
         except Exception as e:
             logger.error(f"[CTRL] _apply_state error: {e}")
@@ -986,6 +1126,7 @@ class ControlBridge(threading.Thread):
                 logger.info(f"[HOME] axis {aid}: abs_pos <- {home_pos_mm[i]:.3f} mm ({home_pos_turns[i]:.4f} turns)")
             except Exception as e:
                 logger.warning(f"[HOME] axis {aid} set_absolute_position failed: {e}")
+        self._last_spool_cmd_mm = [float(x) for x in home_pos_mm]
 
     def _apply_pretension_mode(self):
         """Put all axes into torque control + closed loop."""
@@ -996,6 +1137,277 @@ class ControlBridge(threading.Thread):
             logger.info("[PRET] applied torque control mode to all axes")
         except Exception as e:
             logger.error(f"[PRET] _apply_pretension_mode error: {e}")
+
+    def _open_diag_log(self):
+        os.makedirs(self.diag_log_dir, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._diag_log_path = os.path.join(self.diag_log_dir, f"control_diag_{ts}.csv")
+        self._diag_file = open(self._diag_log_path, "w", newline="", encoding="utf-8")
+        self._diag_writer = csv.writer(self._diag_file)
+        self._diag_writer.writerow(self._diag_headers())
+        self._diag_start_perf = time.perf_counter()
+        self._diag_last_log_perf = self._diag_start_perf
+        logger.info(f"[CTRL] Diagnostic CSV logging enabled: {self._diag_log_path}")
+
+    def _close_diag_log(self):
+        if self._diag_file is not None:
+            try:
+                self._diag_file.flush()
+                self._diag_file.close()
+            except Exception:
+                pass
+            self._diag_file = None
+            self._diag_writer = None
+
+    def _diag_headers(self):
+        headers = [
+            "t_rel_s",
+            "t_wall_s",
+            "sim_time_s",
+            "sim_rt_factor",
+            "state",
+            "profile_active",
+            "hand_cmd_x_mm",
+            "hand_cmd_y_mm",
+            "hand_cmd_z_mm",
+            "hand_cmd_roll_deg",
+            "hand_cmd_pitch_deg",
+            "hand_cmd_yaw_deg",
+            "hand_cmd_vx_mps",
+            "hand_cmd_vy_mps",
+            "hand_cmd_vz_mps",
+            "hand_cmd_ax_mps2",
+            "hand_cmd_ay_mps2",
+            "hand_cmd_az_mps2",
+            "hand_rsp_x_mm",
+            "hand_rsp_y_mm",
+            "hand_rsp_z_mm",
+            "hand_rsp_roll_deg",
+            "hand_rsp_pitch_deg",
+            "hand_rsp_yaw_deg",
+            "hand_rsp_vx_mps",
+            "hand_rsp_vy_mps",
+            "hand_rsp_vz_mps",
+            "hand_rsp_rollrate_degps",
+            "hand_rsp_pitchrate_degps",
+            "wrench_cmd_fx_N",
+            "wrench_cmd_fy_N",
+            "wrench_cmd_fz_N",
+            "wrench_cmd_tx_Nm",
+            "wrench_cmd_ty_Nm",
+            "wrench_rsp_fx_N",
+            "wrench_rsp_fy_N",
+            "wrench_rsp_fz_N",
+            "wrench_rsp_tx_Nm",
+            "wrench_rsp_ty_Nm",
+        ]
+        for i in range(6):
+            headers.append(f"spool_cmd_mm_{i + 1}")
+        for i in range(6):
+            headers.append(f"spool_rsp_mm_{i + 1}")
+        for i in range(6):
+            headers.append(f"spool_rsp_mmps_{i + 1}")
+        for i in range(6):
+            headers.append(f"spool_cmd_torque_nm_{i + 1}")
+        for i in range(6):
+            headers.append(f"spool_rsp_torque_nm_{i + 1}")
+        for i in range(6):
+            headers.append(f"spool_cmd_tension_N_{i + 1}")
+        for i in range(6):
+            headers.append(f"spool_rsp_tension_N_{i + 1}")
+        for i in range(6):
+            headers.append(f"bus_v_{i + 1}")
+        for i in range(6):
+            headers.append(f"bus_i_{i + 1}")
+        for i in range(6):
+            headers.append(f"motor_i_{i + 1}")
+        for i in range(6):
+            headers.append(f"temp_fet_c_{i + 1}")
+        for i in range(6):
+            headers.append(f"temp_motor_c_{i + 1}")
+        return headers
+
+    def _update_sim_timing(self, now_perf):
+        self._sim_time_s = float("nan")
+        self._sim_rt_factor = float("nan")
+        if not hasattr(self.driver, "get_sim_time"):
+            self.state.set_control_time_s(None)
+            self._sim_time_prev = None
+            self._sim_wall_prev = None
+            return
+        try:
+            sim_time = self.driver.get_sim_time()
+        except Exception:
+            sim_time = None
+        if sim_time is None:
+            self.state.set_control_time_s(None)
+            self._sim_time_prev = None
+            self._sim_wall_prev = None
+            return
+
+        sim_time = float(sim_time)
+        self.state.set_control_time_s(sim_time)
+        self._sim_time_s = sim_time
+        if self._sim_time_prev is not None and self._sim_wall_prev is not None:
+            ds = sim_time - self._sim_time_prev
+            dw = float(now_perf - self._sim_wall_prev)
+            if dw > 1e-6:
+                self._sim_rt_factor = ds / dw
+        self._sim_time_prev = sim_time
+        self._sim_wall_prev = float(now_perf)
+
+    @staticmethod
+    def _float_or_nan(x):
+        if x is None:
+            return float("nan")
+        try:
+            return float(x)
+        except Exception:
+            return float("nan")
+
+    def _write_diag_row(self, now_perf):
+        if self._diag_writer is None:
+            return
+
+        t_rel = float(now_perf - self._diag_start_perf)
+        t_wall = time.time()
+        state_name = self.state.get_state()
+        profile_active = 0
+        with self.state.lock:
+            if self.state.player_thread is not None:
+                profile_active = 1
+
+        hand_t_mm, hand_q, hand_v_cmd_mps, hand_a_cmd_mps2 = self.state.get_hand_motion()
+        hand_cmd_roll, hand_cmd_pitch, hand_cmd_yaw = quat_to_rpy_rad(hand_q)
+        hand_cmd_roll = math.degrees(hand_cmd_roll)
+        hand_cmd_pitch = math.degrees(hand_cmd_pitch)
+        hand_cmd_yaw = math.degrees(hand_cmd_yaw)
+
+        hand_rsp = [float("nan")] * 11
+        if hasattr(self.driver, "get_platform_state"):
+            try:
+                q_cur, qd_cur = self.driver.get_platform_state()
+                if q_cur is not None and qd_cur is not None:
+                    q_cur = np.asarray(q_cur, dtype=float)
+                    qd_cur = np.asarray(qd_cur, dtype=float)
+                    hand_rsp[0] = 1000.0 * float(q_cur[0])
+                    hand_rsp[1] = 1000.0 * float(q_cur[1])
+                    hand_rsp[2] = 1000.0 * float(q_cur[2])
+                    hand_rsp[3] = math.degrees(float(q_cur[3]))
+                    hand_rsp[4] = math.degrees(float(q_cur[4]))
+                    hand_rsp[5] = 0.0
+                    hand_rsp[6] = float(qd_cur[0])
+                    hand_rsp[7] = float(qd_cur[1])
+                    hand_rsp[8] = float(qd_cur[2])
+                    hand_rsp[9] = math.degrees(float(qd_cur[3]))
+                    hand_rsp[10] = math.degrees(float(qd_cur[4]))
+            except Exception:
+                pass
+
+        fb_pos_turns = self.state.get_pos_fbk()
+        fb_vel_turnsps = self.state.get_vel_fbk()
+        spool_rsp_mm = [float("nan")] * 6
+        spool_rsp_mmps = [float("nan")] * 6
+        for i in range(6):
+            if i < len(fb_pos_turns):
+                p = self._float_or_nan(fb_pos_turns[i])
+                spool_rsp_mm[i] = p * MM_PER_TURN[i] if np.isfinite(p) else float("nan")
+            if i < len(fb_vel_turnsps):
+                v = self._float_or_nan(fb_vel_turnsps[i])
+                spool_rsp_mmps[i] = v * MM_PER_TURN[i] if np.isfinite(v) else float("nan")
+
+        torque_rsp = [float("nan")] * 6
+        if hasattr(self.driver, "get_axis_torques"):
+            try:
+                trq = self.driver.get_axis_torques()
+                if trq is not None:
+                    for i in range(min(6, len(trq))):
+                        torque_rsp[i] = self._float_or_nan(trq[i])
+            except Exception:
+                pass
+
+        tension_rsp = [float("nan")] * 6
+        if hasattr(self.driver, "get_cable_tensions"):
+            try:
+                tr = self.driver.get_cable_tensions()
+                if tr is not None:
+                    for i in range(min(6, len(tr))):
+                        tension_rsp[i] = self._float_or_nan(tr[i])
+            except Exception:
+                pass
+        # Fallback: infer equivalent tension from applied torque feedback.
+        for i in range(6):
+            if not np.isfinite(tension_rsp[i]) and np.isfinite(torque_rsp[i]):
+                tension_rsp[i] = float(torque_rsp[i]) / float(TORQUE_PER_TENSION)
+
+        tau_cmd = np.asarray(self._last_tau_plat_des, dtype=float).copy()
+        tau_rsp = np.full(5, np.nan, dtype=float)
+        if hasattr(self.driver, "get_cable_jacobian_plat"):
+            try:
+                J_len_plat = np.asarray(self.driver.get_cable_jacobian_plat(), dtype=float)
+                T_rsp = np.asarray(tension_rsp, dtype=float)
+                if J_len_plat.shape == (6, 5) and np.all(np.isfinite(T_rsp)):
+                    tau_rsp = float(TASK_WRENCH_FROM_TENSION_SIGN) * (J_len_plat.T @ T_rsp)
+            except Exception:
+                pass
+
+        row = [
+            t_rel,
+            t_wall,
+            self._sim_time_s,
+            self._sim_rt_factor,
+            state_name,
+            profile_active,
+            float(hand_t_mm[0]),
+            float(hand_t_mm[1]),
+            float(hand_t_mm[2]),
+            hand_cmd_roll,
+            hand_cmd_pitch,
+            hand_cmd_yaw,
+            float(hand_v_cmd_mps[0]),
+            float(hand_v_cmd_mps[1]),
+            float(hand_v_cmd_mps[2]),
+            float(hand_a_cmd_mps2[0]),
+            float(hand_a_cmd_mps2[1]),
+            float(hand_a_cmd_mps2[2]),
+            hand_rsp[0],
+            hand_rsp[1],
+            hand_rsp[2],
+            hand_rsp[3],
+            hand_rsp[4],
+            hand_rsp[5],
+            hand_rsp[6],
+            hand_rsp[7],
+            hand_rsp[8],
+            hand_rsp[9],
+            hand_rsp[10],
+            self._float_or_nan(tau_cmd[0]),
+            self._float_or_nan(tau_cmd[1]),
+            self._float_or_nan(tau_cmd[2]),
+            self._float_or_nan(tau_cmd[3]),
+            self._float_or_nan(tau_cmd[4]),
+            self._float_or_nan(tau_rsp[0]),
+            self._float_or_nan(tau_rsp[1]),
+            self._float_or_nan(tau_rsp[2]),
+            self._float_or_nan(tau_rsp[3]),
+            self._float_or_nan(tau_rsp[4]),
+        ]
+
+        row.extend([self._float_or_nan(v) for v in self._last_spool_cmd_mm])
+        row.extend([self._float_or_nan(v) for v in spool_rsp_mm])
+        row.extend([self._float_or_nan(v) for v in spool_rsp_mmps])
+        row.extend([self._float_or_nan(v) for v in self._last_torque_cmd_nm])
+        row.extend([self._float_or_nan(v) for v in torque_rsp])
+        row.extend([self._float_or_nan(v) for v in self._last_tension_cmd_N])
+        row.extend([self._float_or_nan(v) for v in tension_rsp])
+        row.extend([self._float_or_nan(v) for v in self.state.get_bus_voltage()])
+        row.extend([self._float_or_nan(v) for v in self.state.get_bus_current()])
+        row.extend([self._float_or_nan(v) for v in self.state.get_motor_current()])
+        row.extend([self._float_or_nan(v) for v in self.state.get_temp_fet()])
+        row.extend([self._float_or_nan(v) for v in self.state.get_temp_motor()])
+        self._diag_writer.writerow(row)
+        if self._diag_file is not None:
+            self._diag_file.flush()
 
 
 def udp_telemetry_sender(state: RobotState, udp_sock, stop_event):
@@ -1147,7 +1559,11 @@ def tcp_command_server(state: RobotState):
                             rate_hz = float(msg.get("rate_hz", 100.0))
                             state.start_profile(rate_hz)
                         elif mtype == "pose_profile_upload":
-                            # expected rows: [t, x_mm, y_mm, z_mm, roll_deg, pitch_deg, yaw_deg]
+                            # expected rows:
+                            #  [t, x_mm, y_mm, z_mm, roll_deg, pitch_deg, yaw_deg]
+                            # or full feedforward rows:
+                            #  [t, x_mm, y_mm, z_mm, vx_mps, vy_mps, vz_mps,
+                            #   ax_mps2, ay_mps2, az_mps2, roll_deg, pitch_deg, yaw_deg]
                             profile = msg.get("profile", [])
                             state.set_pose_profile(profile)
                         elif mtype == "pose_profile_start":

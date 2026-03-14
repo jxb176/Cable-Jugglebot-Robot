@@ -57,6 +57,7 @@ class MuJoCoSimulationDriver(RobotDriver):
         self.act_ids = None
         self.anchor_sids = None
         self.plat_sids = None
+        self.payout_tids = None
         self.r = None  # capstan radii
         self.I_spool = None
         self.b_spool = None
@@ -125,8 +126,8 @@ class MuJoCoSimulationDriver(RobotDriver):
 
         # Capstan radii (from tendon coefficients)
         PAYOUT_TENDONS = ["payout1", "payout2", "payout3", "payout4", "payout5", "payout6"]
-        payout_tids = np.array([self.model.tendon(n).id for n in PAYOUT_TENDONS], dtype=int)
-        self.r = self._capstan_radii_from_xml_coefs(payout_tids)
+        self.payout_tids = np.array([self.model.tendon(n).id for n in PAYOUT_TENDONS], dtype=int)
+        self.r = self._capstan_radii_from_xml_coefs(self.payout_tids)
 
         # Spool dynamics
         self.b_spool = self.model.dof_damping[self.spool_dadr].astype(float)
@@ -245,6 +246,38 @@ class MuJoCoSimulationDriver(RobotDriver):
             q = self.data.qpos[self.plat_qadr].copy()
             qd = self.data.qvel[self.plat_dadr].copy()
         return q, qd
+
+    def get_cable_tensions(self):
+        """
+        Return cable tension-equivalent feedback [N] as length-6 list.
+
+        MuJoCo does not expose tendon force directly for these kinematic payout tendons,
+        so use applied actuator torque divided by effective capstan radius magnitude.
+        """
+        if self.data is None or self.r is None:
+            return None
+        with self._data_access():
+            tau = self.data.actuator_force[self.act_ids].astype(float)
+            out = []
+            for i in range(6):
+                rmag = max(abs(float(self.r[i])), 1e-9)
+                out.append(float(tau[i]) / rmag)
+            return out
+
+    def get_axis_torques(self):
+        """Return applied actuator torques [Nm] for each axis."""
+        if self.data is None:
+            return None
+        with self._data_access():
+            tau = self.data.actuator_force[self.act_ids].astype(float)
+            return [float(x) for x in tau]
+
+    def get_sim_time(self):
+        """Return MuJoCo simulation time [s], if available."""
+        if self.data is None:
+            return None
+        with self._data_access():
+            return float(self.data.time)
 
     def compute_platform_wrench(self, qdd_cmd):
         """Compute platform generalized wrench tau = (M*qdd_full + bias)[plat_dofs]."""
