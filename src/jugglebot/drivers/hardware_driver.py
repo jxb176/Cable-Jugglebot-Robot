@@ -40,21 +40,13 @@ class HardwareDriver(RobotDriver):
                 axis = self.manager.add_axis(aid)
                 self.axes[aid] = axis
 
-                # Set up callbacks
-                if self._position_callback or self._velocity_callback:
-                    axis.on_encoder(lambda pos, vel, i=aid: self._handle_encoder(i, pos, vel))
-
-                if self._bus_callback:
-                    axis.on_bus(lambda vbus, ibus, i=aid: self._handle_bus(i, vbus, ibus))
-
-                if self._current_callback:
-                    axis.on_iq(lambda iq_set, iq_meas, i=aid: self._handle_current(i, iq_meas))
-
-                if self._temp_callback:
-                    axis.on_temp(lambda fet, motor, i=aid: self._handle_temp(i, fet, motor))
-
-                if self._heartbeat_callback:
-                    axis.on_heartbeat(lambda err, st, proc, i=aid: self._handle_heartbeat(i, err, st, proc))
+                # Always register handlers; _handle_* methods dispatch only if
+                # corresponding external callbacks are set.
+                axis.on_encoder(lambda pos, vel, i=aid: self._handle_encoder(i, pos, vel))
+                axis.on_bus(lambda vbus, ibus, i=aid: self._handle_bus(i, vbus, ibus))
+                axis.on_iq(lambda iq_set, iq_meas, i=aid: self._handle_current(i, iq_meas))
+                axis.on_temp(lambda fet, motor, i=aid: self._handle_temp(i, fet, motor))
+                axis.on_heartbeat(lambda err, st, proc, i=aid: self._handle_heartbeat(i, err, st, proc))
 
                 logger.info(f"Registered axis {aid}")
 
