@@ -22,6 +22,7 @@ from jugglebot.core.robot_server import (
     ControlBridge,
     tcp_command_server,
     axes_state_logger,
+    ensure_can_interface_up,
 )
 from jugglebot.drivers.hardware_driver import HardwareDriver
 from jugglebot.drivers.simulation_driver import SimulationDriver

@@ -31,6 +31,9 @@ sim = [
 optimization = [
     "osqp",
 ]
+hardware = [
+    "python-can>=4.0",
+]
 
 # Command line entry points
 [project.scripts]
