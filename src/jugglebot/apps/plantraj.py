@@ -64,7 +64,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Generate offline trajectories for Jugglebot")
     parser.add_argument("--profile", default="simple_throw", choices=["simple_throw"], help="Profile template")
     parser.add_argument("--profile-file", type=str, default=None, help="YAML profile path defining endpoints/segments")
-    parser.add_argument("--sample-hz", type=float, default=500.0, help="Sampling frequency (legacy alias)")
+    parser.add_argument("--sample-hz", type=float, default=100.0, help="Sampling frequency (legacy alias)")
     parser.add_argument("--command-rate-hz", type=float, default=None, help="Command generation rate in Hz")
     parser.add_argument("--throw-v", type=float, default=4.9, help="Throw speed for simple_throw (m/s)")
     parser.add_argument("--out-dir", type=str, default=".", help="Output directory for generated CSV files")

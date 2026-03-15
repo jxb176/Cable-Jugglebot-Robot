@@ -44,9 +44,9 @@ TORQUE_CTRL_BIAS_N = 12.0
 TORQUE_CTRL_MIN_N = 0.0
 TORQUE_CTRL_MAX_N = 180.0
 #TASK_KP = np.diag([1200.0, 1200.0, 1800.0, 120000.0, 120000.0])
-TASK_KP = np.diag([500.0, 500.0, 800.0, 5.0, 5.0])
+TASK_KP = np.diag([250.0, 250.0, 400.0, 2.5, 2.5])
 #TASK_KD = np.diag([80.0, 80.0, 120.0, 0.0, 0.0])
-TASK_KD = np.diag([15.0, 15.0, 24.0, 0.1, 0.1])
+TASK_KD = np.diag([7.5, 7.5, 12.0, 0.05, 0.05])
 TASK_KI = np.diag([0.0, 0.0, 0.0, 0.0, 0.0])
 TASK_INT_CLIP = np.array([0.0, 0.0, 0.0, 0.35, 0.35], dtype=float)
 TASK_TMIN_N = 5.0
@@ -345,6 +345,11 @@ class RobotState:
         self.hand_est_q = (1.0, 0.0, 0.0, 0.0)
         self.hand_est_v_mps = (float("nan"), float("nan"), float("nan"))
         self.hand_est_w_rps = (float("nan"), float("nan"), float("nan"))
+        self.comm_can_rx_hz = float("nan")
+        self.comm_can_tx_hz = float("nan")
+        self.comm_can_msg_hz = float("nan")
+        self.comm_can_util_est = float("nan")
+        self.comm_pos_fbk_hz = float("nan")
         self.pose_profile = []  # list of [t, x_mm, y_mm, z_mm, roll_deg, pitch_deg, yaw_deg]
         self.control_time_s = None
 
@@ -387,6 +392,29 @@ class RobotState:
     def get_hand_estimate(self):
         with self.lock:
             return self.hand_est_t_mm, self.hand_est_q, self.hand_est_v_mps, self.hand_est_w_rps
+
+    def set_comm_stats(self, can_rx_hz=None, can_tx_hz=None, can_msg_hz=None, can_util_est=None, pos_fbk_hz=None):
+        with self.lock:
+            if can_rx_hz is not None:
+                self.comm_can_rx_hz = float(can_rx_hz)
+            if can_tx_hz is not None:
+                self.comm_can_tx_hz = float(can_tx_hz)
+            if can_msg_hz is not None:
+                self.comm_can_msg_hz = float(can_msg_hz)
+            if can_util_est is not None:
+                self.comm_can_util_est = float(can_util_est)
+            if pos_fbk_hz is not None:
+                self.comm_pos_fbk_hz = float(pos_fbk_hz)
+
+    def get_comm_stats(self):
+        with self.lock:
+            return {
+                "can_rx_hz": float(self.comm_can_rx_hz),
+                "can_tx_hz": float(self.comm_can_tx_hz),
+                "can_msg_hz": float(self.comm_can_msg_hz),
+                "can_util_est": float(self.comm_can_util_est),
+                "pos_fbk_hz": float(self.comm_pos_fbk_hz),
+            }
 
     def get_hand_version(self):
         with self.lock:
@@ -1026,6 +1054,19 @@ class ControlBridge(threading.Thread):
                             self._publish_platform_estimate(q_cur, qd_cur)
                     except Exception:
                         pass
+                if hasattr(self.driver, "get_comm_stats"):
+                    try:
+                        cstats = self.driver.get_comm_stats()
+                        if isinstance(cstats, dict):
+                            self.state.set_comm_stats(
+                                can_rx_hz=cstats.get("can_rx_hz"),
+                                can_tx_hz=cstats.get("can_tx_hz"),
+                                can_msg_hz=cstats.get("can_msg_hz"),
+                                can_util_est=cstats.get("can_util_est"),
+                                pos_fbk_hz=cstats.get("pos_fbk_hz"),
+                            )
+                    except Exception:
+                        pass
                 self._update_sim_timing(now)
                 if self._diag_writer is not None and (now - self._diag_last_log_perf) >= (1.0 / self.diag_log_hz):
                     self._write_diag_row(now)
@@ -1547,6 +1588,7 @@ def udp_telemetry_sender(state: RobotState, udp_sock, stop_event):
                 hand_cmd_roll, hand_cmd_pitch, hand_cmd_yaw = quat_to_rpy_rad(hand_cmd_q)
                 hand_est_t_mm, hand_est_q, hand_est_v_mps, hand_est_w_rps = state.get_hand_estimate()
                 hand_est_roll, hand_est_pitch, hand_est_yaw = quat_to_rpy_rad(hand_est_q)
+                comm = state.get_comm_stats()
                 msg = {
                     "t": time.time(),
                     "pos": fb_pos_mm,
@@ -1582,6 +1624,11 @@ def udp_telemetry_sender(state: RobotState, udp_sock, stop_event):
                         math.degrees(float(hand_est_w_rps[1])),
                         math.degrees(float(hand_est_w_rps[2])),
                     ],
+                    "can_rx_hz": float(comm.get("can_rx_hz", float("nan"))),
+                    "can_tx_hz": float(comm.get("can_tx_hz", float("nan"))),
+                    "can_msg_hz": float(comm.get("can_msg_hz", float("nan"))),
+                    "can_util_est": float(comm.get("can_util_est", float("nan"))),
+                    "pos_fbk_hz": float(comm.get("pos_fbk_hz", float("nan"))),
                 }
                 udp_sock.sendto(json.dumps(msg).encode("utf-8"), controller_addr)
         except Exception as e:

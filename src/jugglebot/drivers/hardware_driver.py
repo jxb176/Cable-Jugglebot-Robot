@@ -6,6 +6,7 @@ import logging
 import math
 import threading
 import time
+from collections import deque
 from typing import Optional, Callable, List
 
 import numpy as np
@@ -38,6 +39,8 @@ class HardwareDriver(RobotDriver):
         capstan_radius_m: float = 0.01,
         torque_direction: float = 1.0,
         pose_est_rate_hz: float = 100.0,
+        can_bitrate: float = 1_000_000.0,
+        can_frame_bits_est: float = 128.0,
     ):
         self.canbus = canbus
         self.axis_ids = axis_ids or [0, 1, 2, 3, 4, 5]
@@ -72,6 +75,9 @@ class HardwareDriver(RobotDriver):
         self._pose_last_perf = 0.0
         self._pose_update_dt = 1.0 / max(1.0, float(pose_est_rate_hz))
         self._lock = threading.Lock()
+        self._enc_times = deque()
+        self._can_bitrate = max(1.0, float(can_bitrate))
+        self._can_frame_bits_est = max(1.0, float(can_frame_bits_est))
 
     def start(self):
         """Start the ODrive CAN manager."""
@@ -248,6 +254,43 @@ class HardwareDriver(RobotDriver):
             return np.zeros((len(self.axis_ids), 5), dtype=float)
         return self._cable_lengths_jacobian_pose5_fd(np.asarray(q, dtype=float))
 
+    def get_comm_stats(self):
+        """
+        Return communication stats for UI/debugging.
+        Keys: can_rx_hz, can_tx_hz, can_msg_hz, can_util_est, pos_fbk_hz.
+        """
+        can_rx_hz = float("nan")
+        can_tx_hz = float("nan")
+        can_msg_hz = float("nan")
+        can_util_est = float("nan")
+        pos_fbk_hz = float("nan")
+
+        if self.manager and hasattr(self.manager, "get_rate_stats"):
+            try:
+                d = self.manager.get_rate_stats(window_s=1.0)
+                can_rx_hz = float(d.get("rx_rate_hz", float("nan")))
+                can_tx_hz = float(d.get("tx_rate_hz", float("nan")))
+                can_msg_hz = can_rx_hz + can_tx_hz
+                can_util_est = (can_msg_hz * self._can_frame_bits_est) / self._can_bitrate
+            except Exception:
+                pass
+
+        now = time.perf_counter()
+        with self._lock:
+            tmin = now - 1.0
+            while self._enc_times and self._enc_times[0] < tmin:
+                self._enc_times.popleft()
+            if self._enc_times:
+                pos_fbk_hz = float(len(self._enc_times))
+
+        return {
+            "can_rx_hz": can_rx_hz,
+            "can_tx_hz": can_tx_hz,
+            "can_msg_hz": can_msg_hz,
+            "can_util_est": can_util_est,
+            "pos_fbk_hz": pos_fbk_hz,
+        }
+
     # Callback setters
     def set_position_callback(self, callback: Callable[[int, float], None]):
         self._position_callback = callback
@@ -274,6 +317,7 @@ class HardwareDriver(RobotDriver):
             with self._lock:
                 self._axis_pos_turns[idx] = float(pos)
                 self._axis_vel_turnsps[idx] = float(vel)
+                self._enc_times.append(time.perf_counter())
         if self._position_callback:
             self._position_callback(axis_id, pos)
         if self._velocity_callback:

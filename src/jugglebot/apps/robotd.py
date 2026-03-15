@@ -83,6 +83,7 @@ def main():
         capstan_radius_m=capstan_radius_m,
         torque_direction=torque_direction,
         pose_est_rate_hz=pose_est_rate_hz,
+        can_bitrate=float(can_bitrate),
     )
     odrv_bridge = ControlBridge(state, driver)
     odrv_bridge.start()

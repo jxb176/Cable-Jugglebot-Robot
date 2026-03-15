@@ -2,6 +2,8 @@ import can
 import struct
 import threading
 import enum
+import time
+from collections import deque
 
 
 class AxisState(enum.IntEnum):
@@ -124,6 +126,9 @@ class ODriveCanManager:
         self.bus = can.interface.Bus(channel=canbus, bustype="socketcan")
         self.axes = {}
         self._stop = threading.Event()
+        self._stats_lock = threading.Lock()
+        self._rx_times = deque()
+        self._tx_times = deque()
         self._thread = threading.Thread(target=self._listener, daemon=True)
         self._thread.start()
 
@@ -146,12 +151,39 @@ class ODriveCanManager:
             is_remote_frame=rtr,
         )
         self.bus.send(msg)
+        now = time.perf_counter()
+        with self._stats_lock:
+            self._tx_times.append(now)
+            self._prune_stats_locked(now, 2.0)
+
+    def get_rate_stats(self, window_s=1.0):
+        now = time.perf_counter()
+        ws = max(0.1, float(window_s))
+        with self._stats_lock:
+            self._prune_stats_locked(now, ws)
+            rx_rate_hz = float(len(self._rx_times)) / ws
+            tx_rate_hz = float(len(self._tx_times)) / ws
+        return {
+            "rx_rate_hz": rx_rate_hz,
+            "tx_rate_hz": tx_rate_hz,
+        }
+
+    def _prune_stats_locked(self, now, window_s):
+        tmin = now - float(window_s)
+        while self._rx_times and self._rx_times[0] < tmin:
+            self._rx_times.popleft()
+        while self._tx_times and self._tx_times[0] < tmin:
+            self._tx_times.popleft()
 
     def _listener(self):
         while not self._stop.is_set():
             msg = self.bus.recv(timeout=0.1)
             if not msg:
                 continue
+            now = time.perf_counter()
+            with self._stats_lock:
+                self._rx_times.append(now)
+                self._prune_stats_locked(now, 2.0)
             axis_id = msg.arbitration_id // 0x20
             cmd_id = msg.arbitration_id % 0x20
             if axis_id in self.axes:
