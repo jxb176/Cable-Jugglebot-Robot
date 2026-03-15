@@ -46,7 +46,7 @@ TORQUE_CTRL_MAX_N = 180.0
 #TASK_KP = np.diag([1200.0, 1200.0, 1800.0, 120000.0, 120000.0])
 TASK_KP = np.diag([500.0, 500.0, 800.0, 10.0, 10.0])
 #TASK_KD = np.diag([80.0, 80.0, 120.0, 0.0, 0.0])
-TASK_KD = np.diag([0.0, 0.0, 0.0, 0.0, 0.0])
+TASK_KD = np.diag([50.0, 50.0, 80.0, 1.0, 1.0])
 TASK_KI = np.diag([0.0, 0.0, 0.0, 0.0, 0.0])
 TASK_INT_CLIP = np.array([0.0, 0.0, 0.0, 0.35, 0.35], dtype=float)
 TASK_TMIN_N = 5.0
