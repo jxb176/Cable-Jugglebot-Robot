@@ -47,7 +47,7 @@ TORQUE_CTRL_MAX_N = 180.0
 TASK_KP = np.diag([500.0, 500.0, 800.0, 5.0, 5.0])
 #TASK_KD = np.diag([80.0, 80.0, 120.0, 0.0, 0.0])
 TASK_KD = np.diag([15.0, 15.0, 24.0, 0.1, 0.1])
-TASK_KI = np.diag([0.1, 0.1, 0.1, 0.1, 0.1])
+TASK_KI = np.diag([0.0, 0.0, 0.0, 0.0, 0.0])
 TASK_INT_CLIP = np.array([0.0, 0.0, 0.0, 0.35, 0.35], dtype=float)
 TASK_TMIN_N = 5.0
 TASK_TMAX_N = 180.0
@@ -1710,6 +1710,11 @@ def tcp_command_server(state: RobotState):
                             state.set_pose_profile(profile)
                         elif mtype == "pose_profile_start":
                             rate_hz = float(msg.get("rate_hz", 100.0))
+                            state.start_pose_profile(rate_hz)
+                        elif mtype == "pose_profile_run":
+                            profile = msg.get("profile", [])
+                            rate_hz = float(msg.get("rate_hz", 100.0))
+                            state.set_pose_profile(profile)
                             state.start_pose_profile(rate_hz)
                         elif mtype == "profile_stop":
                             state.stop_profile()
