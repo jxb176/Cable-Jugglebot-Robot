@@ -58,7 +58,7 @@ TASK_GRAVITY_FF_Z_N = 1.2
 # Wrench mapping sign convention for tension allocation.
 # +1.0 means tau = (+J^T)T, -1.0 means tau = (-J^T)T.
 # Keep +1.0 for current sim setup (stable empirically with existing signs/axes).
-TASK_WRENCH_FROM_TENSION_SIGN = +1.0
+TASK_WRENCH_FROM_TENSION_SIGN = -1.0
 
 #CLEANUP into ODRIVE library
 # ODrive controller modes (CANSimple Set_Controller_Mode)
