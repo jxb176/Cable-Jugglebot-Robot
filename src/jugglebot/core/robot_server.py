@@ -330,6 +330,11 @@ class RobotState:
         self.pret_upper_N = 0.0
         self.pret_lower_N = 0.0
         self.pret_version = 0
+        self.task_gain_version = 0
+        self.task_kp_xyz_mult = 1.0
+        self.task_kp_rp_mult = 1.0
+        self.task_kd_xyz_mult = 1.0
+        self.task_kd_rp_mult = 1.0
         # --- Hand (platform) command in global coordinates (mm + quaternion) ---
         self.hand_t_mm = (0.0, 0.0, 0.0)
         self.hand_q = (1.0, 0.0, 0.0, 0.0)
@@ -693,6 +698,36 @@ class RobotState:
         with self.lock:
             return int(self.pret_version)
 
+    def request_task_gain_multipliers(self, kp_xyz=None, kp_rp=None, kd_xyz=None, kd_rp=None):
+        with self.lock:
+            if kp_xyz is not None:
+                self.task_kp_xyz_mult = float(kp_xyz)
+            if kp_rp is not None:
+                self.task_kp_rp_mult = float(kp_rp)
+            if kd_xyz is not None:
+                self.task_kd_xyz_mult = float(kd_xyz)
+            if kd_rp is not None:
+                self.task_kd_rp_mult = float(kd_rp)
+            self.task_gain_version += 1
+        logger.info(
+            "[TASK_GAIN] multipliers set: "
+            f"kp_xyz={self.task_kp_xyz_mult:.3f}, kp_rp={self.task_kp_rp_mult:.3f}, "
+            f"kd_xyz={self.task_kd_xyz_mult:.3f}, kd_rp={self.task_kd_rp_mult:.3f}"
+        )
+
+    def get_task_gain_multipliers(self):
+        with self.lock:
+            return (
+                float(self.task_kp_xyz_mult),
+                float(self.task_kp_rp_mult),
+                float(self.task_kd_xyz_mult),
+                float(self.task_kd_rp_mult),
+            )
+
+    def get_task_gain_version(self):
+        with self.lock:
+            return int(self.task_gain_version)
+
 
 class ProfilePlayer(threading.Thread):
     """Plays a time-position profile with linear interpolation at fixed rate."""
@@ -890,11 +925,15 @@ class ControlBridge(threading.Thread):
         self._sim_rt_factor = float("nan")
         self._sim_time_prev = None
         self._sim_wall_prev = None
+        self._task_kp_runtime = TASK_KP.copy()
+        self._task_kd_runtime = TASK_KD.copy()
+        self._task_ki_runtime = TASK_KI.copy()
 
         #Apply the current state version to avoid auto applying the default by setting these to -1.  Perhaps reconsider this for desired auto init behavior later on
         self._applied_state_version = state.get_state_version()
         self._applied_home_version = state.get_home_version()
         self._applied_pret_version = state.get_pretension_version()
+        self._applied_task_gain_version = -1
 
     def stop(self):
         self._stop.set()
@@ -941,6 +980,11 @@ class ControlBridge(threading.Thread):
                 if pv != self._applied_pret_version:
                     self._apply_pretension_mode()
                     self._applied_pret_version = pv
+
+                gv = self.state.get_task_gain_version()
+                if gv != self._applied_task_gain_version:
+                    self._apply_task_gain_multipliers()
+                    self._applied_task_gain_version = gv
 
                 # Stream setpoints if enabled
                 if st == "enable":
@@ -1044,7 +1088,7 @@ class ControlBridge(threading.Thread):
         self._task_err_int += e * dt
         self._task_err_int = np.clip(self._task_err_int, -TASK_INT_CLIP, TASK_INT_CLIP)
 
-        qdd_fb = TASK_KP @ e + TASK_KD @ ed + TASK_KI @ self._task_err_int
+        qdd_fb = self._task_kp_runtime @ e + self._task_kd_runtime @ ed + self._task_ki_runtime @ self._task_err_int
         qdd_cmd = qdd_ff + qdd_fb
 
         if hasattr(self.driver, "compute_platform_wrench"):
@@ -1122,6 +1166,21 @@ class ControlBridge(threading.Thread):
             self.state.set_hand_estimate(t_mm, q_est, v_mps=v_mps, w_rps=w_rps)
         except Exception:
             pass
+
+    def _apply_task_gain_multipliers(self):
+        kp_xyz, kp_rp, kd_xyz, kd_rp = self.state.get_task_gain_multipliers()
+        self._task_kp_runtime = TASK_KP.copy()
+        self._task_kd_runtime = TASK_KD.copy()
+        self._task_ki_runtime = TASK_KI.copy()
+
+        self._task_kp_runtime[0:3, 0:3] *= kp_xyz
+        self._task_kp_runtime[3:5, 3:5] *= kp_rp
+        self._task_kd_runtime[0:3, 0:3] *= kd_xyz
+        self._task_kd_runtime[3:5, 3:5] *= kd_rp
+        logger.info(
+            "[CTRL] Task gain multipliers applied: "
+            f"kp_xyz={kp_xyz:.3f}, kp_rp={kp_rp:.3f}, kd_xyz={kd_xyz:.3f}, kd_rp={kd_rp:.3f}"
+        )
 
     def _apply_state(self, st: str):
         """Apply high-level state to all axes."""
@@ -1484,6 +1543,8 @@ def udp_telemetry_sender(state: RobotState, udp_sock, stop_event):
                 temp_motor = state.get_temp_motor() or []
                 axis_state = state.get_axis_state() or []
                 axis_error = state.get_axis_error() or []
+                hand_cmd_t_mm, hand_cmd_q, _, _ = state.get_hand_motion()
+                hand_cmd_roll, hand_cmd_pitch, hand_cmd_yaw = quat_to_rpy_rad(hand_cmd_q)
                 hand_est_t_mm, hand_est_q, hand_est_v_mps, hand_est_w_rps = state.get_hand_estimate()
                 hand_est_roll, hand_est_pitch, hand_est_yaw = quat_to_rpy_rad(hand_est_q)
                 msg = {
@@ -1497,6 +1558,14 @@ def udp_telemetry_sender(state: RobotState, udp_sock, stop_event):
                     "temp_motor": [None if x is None else float(x) for x in temp_motor],
                     "axis_state": [None if x is None else int(x) for x in axis_state],
                     "axis_error": [None if x is None else int(x) for x in axis_error],
+                    "hand_cmd_pose": [
+                        float(hand_cmd_t_mm[0]),
+                        float(hand_cmd_t_mm[1]),
+                        float(hand_cmd_t_mm[2]),
+                        math.degrees(float(hand_cmd_roll)),
+                        math.degrees(float(hand_cmd_pitch)),
+                        math.degrees(float(hand_cmd_yaw)),
+                    ],
                     "hand_est_pose": [
                         float(hand_est_t_mm[0]),
                         float(hand_est_t_mm[1]),
@@ -1588,6 +1657,13 @@ def tcp_command_server(state: RobotState):
                             upper = float(msg.get("upper_N", 0.0))
                             lower = float(msg.get("lower_N", 0.0))
                             state.request_pretension(upper, lower)
+                        elif mtype == "task_gain_mult":
+                            state.request_task_gain_multipliers(
+                                kp_xyz=msg.get("kp_xyz"),
+                                kp_rp=msg.get("kp_rp"),
+                                kd_xyz=msg.get("kd_xyz"),
+                                kd_rp=msg.get("kd_rp"),
+                            )
                         elif mtype == "home":
                             home_mm = _coerce_vec6_to_mm(msg, "home_pos")
                             state.request_home(home_mm)
