@@ -75,7 +75,7 @@ class HardwareDriver(RobotDriver):
         self._pose_last_perf = 0.0
         self._pose_update_dt = 1.0 / max(1.0, float(pose_est_rate_hz))
         self._lock = threading.Lock()
-        self._enc_times = deque()
+        self._enc_times_axes = [deque() for _ in self.axis_ids]
         self._can_bitrate = max(1.0, float(can_bitrate))
         self._can_frame_bits_est = max(1.0, float(can_frame_bits_est))
 
@@ -264,6 +264,8 @@ class HardwareDriver(RobotDriver):
         can_msg_hz = float("nan")
         can_util_est = float("nan")
         pos_fbk_hz = float("nan")
+        pos_fbk_period0_min_s = float("nan")
+        pos_fbk_period0_max_s = float("nan")
 
         if self.manager and hasattr(self.manager, "get_rate_stats"):
             try:
@@ -278,10 +280,20 @@ class HardwareDriver(RobotDriver):
         now = time.perf_counter()
         with self._lock:
             tmin = now - 1.0
-            while self._enc_times and self._enc_times[0] < tmin:
-                self._enc_times.popleft()
-            if self._enc_times:
-                pos_fbk_hz = float(len(self._enc_times))
+            total = 0
+            for dq in self._enc_times_axes:
+                while dq and dq[0] < tmin:
+                    dq.popleft()
+                total += len(dq)
+            if self._enc_times_axes:
+                pos_fbk_hz = float(total) / float(len(self._enc_times_axes))
+
+            if self._enc_times_axes and len(self._enc_times_axes[0]) >= 2:
+                t0 = self._enc_times_axes[0]
+                periods = [float(t0[i] - t0[i - 1]) for i in range(1, len(t0))]
+                if periods:
+                    pos_fbk_period0_min_s = float(min(periods))
+                    pos_fbk_period0_max_s = float(max(periods))
 
         return {
             "can_rx_hz": can_rx_hz,
@@ -289,6 +301,8 @@ class HardwareDriver(RobotDriver):
             "can_msg_hz": can_msg_hz,
             "can_util_est": can_util_est,
             "pos_fbk_hz": pos_fbk_hz,
+            "pos_fbk_period0_min_s": pos_fbk_period0_min_s,
+            "pos_fbk_period0_max_s": pos_fbk_period0_max_s,
         }
 
     # Callback setters
@@ -317,7 +331,7 @@ class HardwareDriver(RobotDriver):
             with self._lock:
                 self._axis_pos_turns[idx] = float(pos)
                 self._axis_vel_turnsps[idx] = float(vel)
-                self._enc_times.append(time.perf_counter())
+                self._enc_times_axes[idx].append(time.perf_counter())
         if self._position_callback:
             self._position_callback(axis_id, pos)
         if self._velocity_callback:

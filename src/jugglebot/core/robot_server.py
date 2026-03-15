@@ -350,6 +350,8 @@ class RobotState:
         self.comm_can_msg_hz = float("nan")
         self.comm_can_util_est = float("nan")
         self.comm_pos_fbk_hz = float("nan")
+        self.comm_pos_fbk_period0_min_s = float("nan")
+        self.comm_pos_fbk_period0_max_s = float("nan")
         self.pose_profile = []  # list of [t, x_mm, y_mm, z_mm, roll_deg, pitch_deg, yaw_deg]
         self.control_time_s = None
 
@@ -393,7 +395,16 @@ class RobotState:
         with self.lock:
             return self.hand_est_t_mm, self.hand_est_q, self.hand_est_v_mps, self.hand_est_w_rps
 
-    def set_comm_stats(self, can_rx_hz=None, can_tx_hz=None, can_msg_hz=None, can_util_est=None, pos_fbk_hz=None):
+    def set_comm_stats(
+        self,
+        can_rx_hz=None,
+        can_tx_hz=None,
+        can_msg_hz=None,
+        can_util_est=None,
+        pos_fbk_hz=None,
+        pos_fbk_period0_min_s=None,
+        pos_fbk_period0_max_s=None,
+    ):
         with self.lock:
             if can_rx_hz is not None:
                 self.comm_can_rx_hz = float(can_rx_hz)
@@ -405,6 +416,10 @@ class RobotState:
                 self.comm_can_util_est = float(can_util_est)
             if pos_fbk_hz is not None:
                 self.comm_pos_fbk_hz = float(pos_fbk_hz)
+            if pos_fbk_period0_min_s is not None:
+                self.comm_pos_fbk_period0_min_s = float(pos_fbk_period0_min_s)
+            if pos_fbk_period0_max_s is not None:
+                self.comm_pos_fbk_period0_max_s = float(pos_fbk_period0_max_s)
 
     def get_comm_stats(self):
         with self.lock:
@@ -414,6 +429,8 @@ class RobotState:
                 "can_msg_hz": float(self.comm_can_msg_hz),
                 "can_util_est": float(self.comm_can_util_est),
                 "pos_fbk_hz": float(self.comm_pos_fbk_hz),
+                "pos_fbk_period0_min_s": float(self.comm_pos_fbk_period0_min_s),
+                "pos_fbk_period0_max_s": float(self.comm_pos_fbk_period0_max_s),
             }
 
     def get_hand_version(self):
@@ -1064,6 +1081,8 @@ class ControlBridge(threading.Thread):
                                 can_msg_hz=cstats.get("can_msg_hz"),
                                 can_util_est=cstats.get("can_util_est"),
                                 pos_fbk_hz=cstats.get("pos_fbk_hz"),
+                                pos_fbk_period0_min_s=cstats.get("pos_fbk_period0_min_s"),
+                                pos_fbk_period0_max_s=cstats.get("pos_fbk_period0_max_s"),
                             )
                     except Exception:
                         pass
@@ -1629,6 +1648,8 @@ def udp_telemetry_sender(state: RobotState, udp_sock, stop_event):
                     "can_msg_hz": float(comm.get("can_msg_hz", float("nan"))),
                     "can_util_est": float(comm.get("can_util_est", float("nan"))),
                     "pos_fbk_hz": float(comm.get("pos_fbk_hz", float("nan"))),
+                    "pos_fbk_period0_min_s": float(comm.get("pos_fbk_period0_min_s", float("nan"))),
+                    "pos_fbk_period0_max_s": float(comm.get("pos_fbk_period0_max_s", float("nan"))),
                 }
                 udp_sock.sendto(json.dumps(msg).encode("utf-8"), controller_addr)
         except Exception as e:
