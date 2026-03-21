@@ -85,7 +85,7 @@ def main():
         pose_est_rate_hz=pose_est_rate_hz,
         can_bitrate=float(can_bitrate),
     )
-    odrv_bridge = ControlBridge(state, driver)
+    odrv_bridge = ControlBridge(state, driver, config=config)
     odrv_bridge.start()
 
     # Start TCP command server

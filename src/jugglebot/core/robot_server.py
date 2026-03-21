@@ -36,13 +36,15 @@ TELEMETRY_RATE_HZ = 50.0
 MM_PER_TURN = [-62.832] * 6  # 2*pi*10mm = 62.832 mm/turn, with sign convention applied
 # Pretension mapping: tension [N] -> capstan torque [Nm]
 CAPSTAN_RADIUS_M = 0.010  # 10 mm
-MOTOR_TORQUE_DIRECTION = 1  # Set to -1 if positive motor torque winds the cable and increases tension, +1 if opposite. This depends on your motor/winch wiring and should be set to ensure that positive torque commands increase tension.
+MOTOR_TORQUE_DIRECTION = -1  # Set to -1 if positive motor torque winds the cable and increases tension, +1 if opposite. This depends on your motor/winch wiring and should be set to ensure that positive torque commands increase tension.
 TORQUE_PER_TENSION = MOTOR_TORQUE_DIRECTION * CAPSTAN_RADIUS_M  # Nm per N  (T = F*r)
 TORQUE_CTRL_KP_N_PER_MM = 0.6
 TORQUE_CTRL_KD_N_PER_MMPS = 0.02
 TORQUE_CTRL_BIAS_N = 12.0
 TORQUE_CTRL_MIN_N = 0.0
 TORQUE_CTRL_MAX_N = 180.0
+DEFAULT_SPOOL_KP_TORQUE_PER_TURN = abs(TORQUE_PER_TENSION) * TORQUE_CTRL_KP_N_PER_MM * abs(MM_PER_TURN[0])
+DEFAULT_SPOOL_KD_TORQUE_PER_TURNPS = abs(TORQUE_PER_TENSION) * TORQUE_CTRL_KD_N_PER_MMPS * abs(MM_PER_TURN[0])
 #TASK_KP = np.diag([1200.0, 1200.0, 1800.0, 120000.0, 120000.0])
 TASK_KP = np.diag([250.0, 250.0, 400.0, 2.5, 2.5])
 #TASK_KD = np.diag([80.0, 80.0, 120.0, 0.0, 0.0])
@@ -55,6 +57,9 @@ TASK_ALLOC_LAMBDA = 1e-2
 TASK_ALLOC_ITERS = 80
 TASK_ALLOC_ALPHA = 0.7
 TASK_GRAVITY_FF_Z_N = 1.2
+OUTER_CORR_KP = np.diag([1.0, 1.0, 1.0, 0.35, 0.35])
+OUTER_CORR_KD = np.diag([0.15, 0.15, 0.15, 0.05, 0.05])
+OUTER_CORR_CABLE_CLIP_M = 0.10
 # Wrench mapping sign convention for tension allocation.
 # +1.0 means tau = (+J^T)T, -1.0 means tau = (-J^T)T.
 # Keep +1.0 for current sim setup (stable empirically with existing signs/axes).
@@ -225,6 +230,16 @@ def _coerce_vec6_to_mm(msg, field_name: str):
     else:
         raise ValueError(f"Unknown units '{units}' (expected 'mm' or 'turns')")
 
+
+def _expand_axis_values(value, default, axis_count: int = 6):
+    if value is None:
+        return [float(default)] * axis_count
+    if isinstance(value, (list, tuple)):
+        if len(value) != axis_count:
+            raise ValueError(f"Expected length-{axis_count} list/tuple, got {len(value)}")
+        return [float(v) for v in value]
+    return [float(value)] * axis_count
+
 os.environ.setdefault("CAN_CHANNEL", ODRIVE_INTERFACE)
 os.environ.setdefault("CAN_BITRATE", str(ODRIVE_BITRATE))
 
@@ -330,11 +345,9 @@ class RobotState:
         self.pret_upper_N = 0.0
         self.pret_lower_N = 0.0
         self.pret_version = 0
-        self.task_gain_version = 0
-        self.task_kp_xyz_mult = 1.0
-        self.task_kp_rp_mult = 1.0
-        self.task_kd_xyz_mult = 1.0
-        self.task_kd_rp_mult = 1.0
+        self.spool_gain_version = 0
+        self.spool_kp_mult = 1.0
+        self.spool_kd_mult = 1.0
         # --- Hand (platform) command in global coordinates (mm + quaternion) ---
         self.hand_t_mm = (0.0, 0.0, 0.0)
         self.hand_q = (1.0, 0.0, 0.0, 0.0)
@@ -743,35 +756,45 @@ class RobotState:
         with self.lock:
             return int(self.pret_version)
 
-    def request_task_gain_multipliers(self, kp_xyz=None, kp_rp=None, kd_xyz=None, kd_rp=None):
+    def request_spool_gain_multipliers(self, kp=None, kd=None):
         with self.lock:
-            if kp_xyz is not None:
-                self.task_kp_xyz_mult = float(kp_xyz)
-            if kp_rp is not None:
-                self.task_kp_rp_mult = float(kp_rp)
-            if kd_xyz is not None:
-                self.task_kd_xyz_mult = float(kd_xyz)
-            if kd_rp is not None:
-                self.task_kd_rp_mult = float(kd_rp)
-            self.task_gain_version += 1
+            if kp is not None:
+                self.spool_kp_mult = float(kp)
+            if kd is not None:
+                self.spool_kd_mult = float(kd)
+            self.spool_gain_version += 1
         logger.info(
-            "[TASK_GAIN] multipliers set: "
-            f"kp_xyz={self.task_kp_xyz_mult:.3f}, kp_rp={self.task_kp_rp_mult:.3f}, "
-            f"kd_xyz={self.task_kd_xyz_mult:.3f}, kd_rp={self.task_kd_rp_mult:.3f}"
+            "[SPOOL_GAIN] multipliers set: "
+            f"kp={self.spool_kp_mult:.3f}, kd={self.spool_kd_mult:.3f}"
         )
 
-    def get_task_gain_multipliers(self):
+    def request_task_gain_multipliers(self, kp_xyz=None, kp_rp=None, kd_xyz=None, kd_rp=None):
+        """
+        Backward-compatible adapter for older UI messages.
+
+        Task-space multipliers no longer drive the control law directly. We map
+        them onto the local spool controller by averaging the provided groups.
+        """
+        kp_terms = [float(v) for v in (kp_xyz, kp_rp) if v is not None]
+        kd_terms = [float(v) for v in (kd_xyz, kd_rp) if v is not None]
+        kp = sum(kp_terms) / len(kp_terms) if kp_terms else None
+        kd = sum(kd_terms) / len(kd_terms) if kd_terms else None
+        self.request_spool_gain_multipliers(kp=kp, kd=kd)
+
+    def get_spool_gain_multipliers(self):
         with self.lock:
-            return (
-                float(self.task_kp_xyz_mult),
-                float(self.task_kp_rp_mult),
-                float(self.task_kd_xyz_mult),
-                float(self.task_kd_rp_mult),
-            )
+            return float(self.spool_kp_mult), float(self.spool_kd_mult)
+
+    def get_task_gain_multipliers(self):
+        kp, kd = self.get_spool_gain_multipliers()
+        return kp, kp, kd, kd
+
+    def get_spool_gain_version(self):
+        with self.lock:
+            return int(self.spool_gain_version)
 
     def get_task_gain_version(self):
-        with self.lock:
-            return int(self.task_gain_version)
+        return self.get_spool_gain_version()
 
 
 class ProfilePlayer(threading.Thread):
@@ -946,11 +969,20 @@ class PoseProfilePlayer(threading.Thread):
 class ControlBridge(threading.Thread):
     """Bridge between RobotState and robot driver (hardware or simulation)."""
 
-    def __init__(self, state: RobotState, driver, axis_ids=None, diag_log_dir: str | None = None, diag_log_hz: float = 100.0):
+    def __init__(
+        self,
+        state: RobotState,
+        driver,
+        axis_ids=None,
+        diag_log_dir: str | None = None,
+        diag_log_hz: float = 100.0,
+        config: dict | None = None,
+    ):
         super().__init__(daemon=True)
         self.state = state
         self.driver = driver
         self.axis_ids = axis_ids or [0, 1, 2, 3, 4, 5]
+        self.config = config or {}
         self._stop = threading.Event()
         self._T_prev = None
         self._task_err_int = np.zeros(5, dtype=float)
@@ -970,15 +1002,50 @@ class ControlBridge(threading.Thread):
         self._sim_rt_factor = float("nan")
         self._sim_time_prev = None
         self._sim_wall_prev = None
-        self._task_kp_runtime = TASK_KP.copy()
-        self._task_kd_runtime = TASK_KD.copy()
-        self._task_ki_runtime = TASK_KI.copy()
+        controller_cfg = (self.config.get("controller") or {}).get("spool_space") or {}
+        mm_per_turn_default = getattr(self.driver, "mm_per_turn", MM_PER_TURN)
+        self._mm_per_turn = _expand_axis_values(mm_per_turn_default, MM_PER_TURN[0], axis_count=len(self.axis_ids))
+        self._spool_kp_base = _expand_axis_values(
+            controller_cfg.get("kp"),
+            DEFAULT_SPOOL_KP_TORQUE_PER_TURN,
+            axis_count=len(self.axis_ids),
+        )
+        self._spool_kd_base = _expand_axis_values(
+            controller_cfg.get("kd"),
+            DEFAULT_SPOOL_KD_TORQUE_PER_TURNPS,
+            axis_count=len(self.axis_ids),
+        )
+        winch_cfg = self.config.get("winches") or {}
+        self._spool_torque_limit_nm = _expand_axis_values(
+            controller_cfg.get("torque_limit_nm"),
+            winch_cfg.get("torque_limit_nm", 1.0),
+            axis_count=len(self.axis_ids),
+        )
+        self._spool_bias_tension_N = _expand_axis_values(
+            controller_cfg.get("bias_tension_N"),
+            TORQUE_CTRL_BIAS_N,
+            axis_count=len(self.axis_ids),
+        )
+        outer_cfg = controller_cfg.get("outer_taskspace_correction") or {}
+        self._outer_corr_kp = np.diag(
+            _expand_axis_values(outer_cfg.get("kp"), 1.0, axis_count=5)
+        )
+        self._outer_corr_kd = np.diag(
+            _expand_axis_values(outer_cfg.get("kd"), 0.15, axis_count=5)
+        )
+        self._outer_corr_cable_clip_m = np.asarray(
+            _expand_axis_values(outer_cfg.get("cable_clip_m"), OUTER_CORR_CABLE_CLIP_M, axis_count=len(self.axis_ids)),
+            dtype=float,
+        )
+        self._enable_position_torque_ff = bool(controller_cfg.get("enable_torque_feedforward", True))
+        self._spool_kp_runtime = list(self._spool_kp_base)
+        self._spool_kd_runtime = list(self._spool_kd_base)
 
         #Apply the current state version to avoid auto applying the default by setting these to -1.  Perhaps reconsider this for desired auto init behavior later on
         self._applied_state_version = state.get_state_version()
         self._applied_home_version = state.get_home_version()
         self._applied_pret_version = state.get_pretension_version()
-        self._applied_task_gain_version = -1
+        self._applied_spool_gain_version = -1
 
     def stop(self):
         self._stop.set()
@@ -1026,16 +1093,16 @@ class ControlBridge(threading.Thread):
                     self._apply_pretension_mode()
                     self._applied_pret_version = pv
 
-                gv = self.state.get_task_gain_version()
-                if gv != self._applied_task_gain_version:
-                    self._apply_task_gain_multipliers()
-                    self._applied_task_gain_version = gv
+                gv = self.state.get_spool_gain_version()
+                if gv != self._applied_spool_gain_version:
+                    self._apply_spool_gain_multipliers()
+                    self._applied_spool_gain_version = gv
 
                 # Stream setpoints if enabled
                 if st == "enable":
                     try:
-                        if hasattr(self.driver, "get_platform_state"):
-                            self._run_taskspace_torque_control()
+                        if hasattr(self.driver, "set_axis_position_command"):
+                            self._run_taskspace_spool_control()
                         else:
                             self._run_cablespace_fallback_control()
 
@@ -1113,12 +1180,9 @@ class ControlBridge(threading.Thread):
                     pass
             logger.info("[CTRL] Bridge stopped")
 
-    def _run_taskspace_torque_control(self):
-        """Task-space controller with Jacobian-based tension allocation."""
+    def _run_taskspace_spool_control(self):
+        """Generate spool references from task-space commands and use local axis position loops."""
         t_mm_cmd, q_cmd, v_cmd_mps, a_cmd_mps2 = self.state.get_hand_motion()
-        cable_mm = pose_to_cable_lengths_mm(GEOM, t_mm_cmd, q_cmd)
-        cmd_mm = [cable_mm[i] - HOME_CABLE_MM[i] for i in range(6)]
-        self._last_spool_cmd_mm = [float(x) for x in cmd_mm]
         roll_cmd, pitch_cmd, _ = quat_to_rpy_rad(q_cmd)
         q_ref = np.array(
             [t_mm_cmd[0] / 1000.0, t_mm_cmd[1] / 1000.0, t_mm_cmd[2] / 1000.0, roll_cmd, pitch_cmd],
@@ -1126,51 +1190,72 @@ class ControlBridge(threading.Thread):
         )
         qd_ref = np.array([float(v_cmd_mps[0]), float(v_cmd_mps[1]), float(v_cmd_mps[2]), 0.0, 0.0], dtype=float)
         qdd_ff = np.array([float(a_cmd_mps2[0]), float(a_cmd_mps2[1]), float(a_cmd_mps2[2]), 0.0, 0.0], dtype=float)
+        cable_mm = pose_to_cable_lengths_mm(GEOM, t_mm_cmd, q_cmd)
+        cmd_m = np.asarray([(cable_mm[i] - HOME_CABLE_MM[i]) / 1000.0 for i in range(6)], dtype=float)
 
-        q_cur, qd_cur = self.driver.get_platform_state()
-        if q_cur is None or qd_cur is None:
-            self._run_cablespace_fallback_control()
-            return
-        self._publish_platform_estimate(q_cur, qd_cur)
-        q_cur = np.asarray(q_cur, dtype=float)
-        qd_cur = np.asarray(qd_cur, dtype=float)
+        q_cur = None
+        qd_cur = None
+        if hasattr(self.driver, "get_platform_state"):
+            try:
+                q_cur, qd_cur = self.driver.get_platform_state()
+            except Exception:
+                q_cur, qd_cur = None, None
+        if q_cur is not None and qd_cur is not None:
+            self._publish_platform_estimate(q_cur, qd_cur)
+            q_cur = np.asarray(q_cur, dtype=float)
+            qd_cur = np.asarray(qd_cur, dtype=float)
+            e = q_ref - q_cur
+            ed = qd_ref - qd_cur
+            if hasattr(self.driver, "get_cable_jacobian_plat"):
+                J_outer = np.asarray(self.driver.get_cable_jacobian_plat(), dtype=float)
+            else:
+                J_outer = cable_lengths_jacobian_pose5_fd(q_cur)
+            cur_lengths_m = cable_lengths_m_from_pose5(q_cur)
+            cur_cmd_m = np.asarray(cur_lengths_m, dtype=float) - (np.asarray(HOME_CABLE_MM, dtype=float) / 1000.0)
+            cable_corr_m = J_outer @ ((self._outer_corr_kp @ e) + (self._outer_corr_kd @ ed))
+            cable_corr_m = np.clip(cable_corr_m, -self._outer_corr_cable_clip_m, self._outer_corr_cable_clip_m)
+            cmd_m = cur_cmd_m + cable_corr_m
 
-        e = q_ref - q_cur
-        ed = qd_ref - qd_cur
-        now = time.perf_counter()
-        if self._task_last_t is None:
-            dt = 0.002
-        else:
-            dt = max(1e-4, min(0.05, now - self._task_last_t))
-        self._task_last_t = now
+        cmd_mm = [1000.0 * float(v) for v in cmd_m]
+        self._last_spool_cmd_mm = [float(x) for x in cmd_mm]
 
-        # Integrate only selected channels (roll/pitch by default), with anti-windup clipping.
-        self._task_err_int += e * dt
-        self._task_err_int = np.clip(self._task_err_int, -TASK_INT_CLIP, TASK_INT_CLIP)
+        cmd_turns = [float(cmd_mm[i]) / float(self._mm_per_turn[i]) for i in range(len(self.axis_ids))]
+        J_cmd = cable_lengths_jacobian_pose5_fd(q_ref)
+        cable_vel_mps = J_cmd @ qd_ref
+        vel_turnsps = []
+        for i in range(len(self.axis_ids)):
+            mm_per_turn = float(self._mm_per_turn[i])
+            if abs(mm_per_turn) < 1e-9:
+                vel_turnsps.append(0.0)
+            else:
+                vel_turnsps.append(float(1000.0 * cable_vel_mps[i]) / mm_per_turn)
 
-        qdd_fb = self._task_kp_runtime @ e + self._task_kd_runtime @ ed + self._task_ki_runtime @ self._task_err_int
-        qdd_cmd = qdd_ff + qdd_fb
-
-        if hasattr(self.driver, "compute_platform_wrench"):
-            tau_plat_des = np.asarray(self.driver.compute_platform_wrench(qdd_cmd), dtype=float)
-        else:
-            tau_plat_des = np.asarray(qdd_cmd, dtype=float)
-            tau_plat_des[2] += TASK_GRAVITY_FF_Z_N
-
-        if hasattr(self.driver, "get_cable_jacobian_plat"):
-            J_len_plat = np.asarray(self.driver.get_cable_jacobian_plat(), dtype=float)
-        else:
-            J_len_plat = cable_lengths_jacobian_pose5_fd(q_cur)
-
-        self._last_tau_plat_des = np.asarray(tau_plat_des, dtype=float)
-        T_des = solve_tensions_least_squares(J_len_plat, tau_plat_des, self._T_prev)
-        self._T_prev = T_des.copy()
-        self._last_tension_cmd_N = [float(x) for x in T_des]
-
-        tau_cmd = TORQUE_PER_TENSION * T_des
-        self._last_torque_cmd_nm = [float(x) for x in tau_cmd]
+        tau_plat_ff = np.asarray(qdd_ff, dtype=float)
+        tau_plat_ff[2] += TASK_GRAVITY_FF_Z_N
+        T_ff = solve_tensions_least_squares(J_cmd, tau_plat_ff, self._T_prev)
+        self._T_prev = T_ff.copy()
+        T_cmd = np.maximum(np.asarray(self._spool_bias_tension_N, dtype=float), T_ff)
+        self._last_tau_plat_des = np.asarray(tau_plat_ff, dtype=float)
+        self._last_tension_cmd_N = [float(x) for x in T_cmd]
+        torque_ff = [float(TORQUE_PER_TENSION) * float(tension) for tension in T_cmd]
+        if not self._enable_position_torque_ff:
+            torque_ff = [0.0] * len(torque_ff)
+        self._last_torque_cmd_nm = [float(x) for x in torque_ff]
         for i, aid in enumerate(self.axis_ids):
-            self.driver.set_axis_torque(aid, float(tau_cmd[i]))
+            self.driver.set_axis_position_command(
+                aid,
+                float(cmd_turns[i]),
+                velocity_ff=float(vel_turnsps[i]),
+                torque_ff=float(torque_ff[i]),
+            )
+
+        if q_cur is None and hasattr(self.driver, "get_platform_state"):
+            try:
+                q_cur, qd_cur = self.driver.get_platform_state()
+                if q_cur is not None and qd_cur is not None:
+                    self._publish_platform_estimate(q_cur, qd_cur)
+            except Exception:
+                pass
 
     def _run_cablespace_fallback_control(self):
         """
@@ -1227,19 +1312,25 @@ class ControlBridge(threading.Thread):
         except Exception:
             pass
 
-    def _apply_task_gain_multipliers(self):
-        kp_xyz, kp_rp, kd_xyz, kd_rp = self.state.get_task_gain_multipliers()
-        self._task_kp_runtime = TASK_KP.copy()
-        self._task_kd_runtime = TASK_KD.copy()
-        self._task_ki_runtime = TASK_KI.copy()
-
-        self._task_kp_runtime[0:3, 0:3] *= kp_xyz
-        self._task_kp_runtime[3:5, 3:5] *= kp_rp
-        self._task_kd_runtime[0:3, 0:3] *= kd_xyz
-        self._task_kd_runtime[3:5, 3:5] *= kd_rp
+    def _apply_spool_gain_multipliers(self):
+        kp_mult, kd_mult = self.state.get_spool_gain_multipliers()
+        self._spool_kp_runtime = [float(v) * float(kp_mult) for v in self._spool_kp_base]
+        self._spool_kd_runtime = [float(v) * float(kd_mult) for v in self._spool_kd_base]
+        applied = False
+        if hasattr(self.driver, "configure_spool_controller"):
+            try:
+                applied = bool(
+                    self.driver.configure_spool_controller(
+                        kp=self._spool_kp_runtime,
+                        kd=self._spool_kd_runtime,
+                        torque_limit=self._spool_torque_limit_nm,
+                    )
+                )
+            except Exception as e:
+                logger.error(f"[CTRL] Failed to configure spool controller: {e}")
         logger.info(
-            "[CTRL] Task gain multipliers applied: "
-            f"kp_xyz={kp_xyz:.3f}, kp_rp={kp_rp:.3f}, kd_xyz={kd_xyz:.3f}, kd_rp={kd_rp:.3f}"
+            "[CTRL] Spool gain multipliers applied: "
+            f"kp={kp_mult:.3f}, kd={kd_mult:.3f}, runtime_applied={applied}"
         )
 
     def _apply_state(self, st: str):
@@ -1247,9 +1338,9 @@ class ControlBridge(threading.Thread):
         try:
             for aid in self.axis_ids:
                 if st == "enable":
-                    self.driver.set_controller_mode(aid, "torque")
+                    self.driver.set_controller_mode(aid, "position")
                     self.driver.set_axis_state(aid, "closed_loop")
-                    logger.info(f"[CTRL] axis {aid}: TORQUE + CLOSED_LOOP_CONTROL")
+                    logger.info(f"[CTRL] axis {aid}: POSITION + CLOSED_LOOP_CONTROL")
 
                 elif st == "pretension":
                     self.driver.set_controller_mode(aid, "torque")
@@ -1731,6 +1822,11 @@ def tcp_command_server(state: RobotState):
                                 kp_rp=msg.get("kp_rp"),
                                 kd_xyz=msg.get("kd_xyz"),
                                 kd_rp=msg.get("kd_rp"),
+                            )
+                        elif mtype == "spool_gain_mult":
+                            state.request_spool_gain_multipliers(
+                                kp=msg.get("kp"),
+                                kd=msg.get("kd"),
                             )
                         elif mtype == "home":
                             home_mm = _coerce_vec6_to_mm(msg, "home_pos")

@@ -57,6 +57,12 @@ class HardwareDriver(RobotDriver):
         self._axis_vel_turnsps = [None] * len(self.axis_ids)
         self._axis_current_a = [None] * len(self.axis_ids)
         self._axis_torque_cmd_nm = [0.0] * len(self.axis_ids)
+        self._axis_pos_cmd_turns = [0.0] * len(self.axis_ids)
+        self._axis_vel_ff_turnsps = [0.0] * len(self.axis_ids)
+        self._spool_kp = None
+        self._spool_kd = None
+        self._spool_torque_limit_nm = None
+        self._spool_gain_apply_warned = False
         if mm_per_turn is None:
             self.mm_per_turn = [-62.832] * len(self.axis_ids)
         else:
@@ -116,9 +122,28 @@ class HardwareDriver(RobotDriver):
 
     def set_axis_position(self, axis_id: int, position: float):
         """Set position setpoint."""
+        self.set_axis_position_command(axis_id, position)
+
+    def set_axis_position_command(
+        self,
+        axis_id: int,
+        position: float,
+        velocity_ff: float = 0.0,
+        torque_ff: float = 0.0,
+    ):
+        """Set a position-mode command with optional feedforward terms."""
         axis = self.axes.get(axis_id)
         if axis:
-            axis.set_input_pos(position)
+            pos = float(position)
+            vel = float(velocity_ff)
+            trq = float(torque_ff)
+            axis.set_input_pos(pos, vel_turns=vel, torque=trq)
+            idx = self._axis_index.get(axis_id)
+            if idx is not None:
+                with self._lock:
+                    self._axis_pos_cmd_turns[idx] = pos
+                    self._axis_vel_ff_turnsps[idx] = vel
+                    self._axis_torque_cmd_nm[idx] = trq
 
     def set_axis_torque(self, axis_id: int, torque: float):
         """Set torque setpoint."""
@@ -253,6 +278,26 @@ class HardwareDriver(RobotDriver):
         if q is None:
             return np.zeros((len(self.axis_ids), 5), dtype=float)
         return self._cable_lengths_jacobian_pose5_fd(np.asarray(q, dtype=float))
+
+    def configure_spool_controller(self, kp=None, kd=None, torque_limit=None):
+        """
+        Record desired spool-space gains for diagnostics.
+
+        The current CANSimple wrapper does not expose endpoint writes for ODrive
+        controller gains, so these settings must still be provisioned on the
+        drive itself.
+        """
+        with self._lock:
+            self._spool_kp = None if kp is None else [float(v) for v in kp]
+            self._spool_kd = None if kd is None else [float(v) for v in kd]
+            self._spool_torque_limit_nm = None if torque_limit is None else [float(v) for v in torque_limit]
+        if not self._spool_gain_apply_warned:
+            logger.warning(
+                "HardwareDriver received spool-space gain config, but runtime ODrive gain programming "
+                "is not implemented in the CAN wrapper. Configure these gains on the drives directly."
+            )
+            self._spool_gain_apply_warned = True
+        return False
 
     def get_comm_stats(self):
         """

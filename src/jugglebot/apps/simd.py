@@ -68,10 +68,18 @@ def main():
     # Setup simulation driver
     odrive_config = config.get("hardware", {}).get("odrive", {})
     axis_ids = odrive_config.get("axis_ids", [0, 1, 2, 3, 4, 5])
+    spool_cfg = config.get("controller", {}).get("spool_space", {})
+    winch_cfg = config.get("winches", {})
 
     # Create simulation driver
-    driver = SimulationDriver(axis_ids=axis_ids, enable_viewer=args.viewer)
-    sim_bridge = ControlBridge(state, driver)
+    driver = SimulationDriver(
+        axis_ids=axis_ids,
+        enable_viewer=args.viewer,
+        spool_kp=spool_cfg.get("kp"),
+        spool_kd=spool_cfg.get("kd"),
+        torque_limit_nm=spool_cfg.get("torque_limit_nm", winch_cfg.get("torque_limit_nm")),
+    )
+    sim_bridge = ControlBridge(state, driver, config=config)
     sim_bridge.start()
 
     auto_enable = bool(args.auto_enable or config.get("robot", {}).get("auto_enable_on_startup", False))

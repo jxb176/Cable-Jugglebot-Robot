@@ -26,6 +26,21 @@ class RobotDriver(ABC):
         """Set position setpoint for an axis."""
         pass
 
+    def set_axis_position_command(
+        self,
+        axis_id: int,
+        position: float,
+        velocity_ff: float = 0.0,
+        torque_ff: float = 0.0,
+    ):
+        """
+        Set a position-mode command for an axis.
+
+        Drivers that support local position control can override this to forward
+        position, velocity feedforward, and torque feedforward together.
+        """
+        self.set_axis_position(axis_id, position)
+
     @abstractmethod
     def set_axis_torque(self, axis_id: int, torque: float):
         """Set torque setpoint for an axis."""
@@ -88,3 +103,11 @@ class RobotDriver(ABC):
     def get_axis_torques(self):
         """Optional: return per-axis applied torque feedback [Nm] as length-6 list, or None."""
         return None
+
+    def configure_spool_controller(self, kp=None, kd=None, torque_limit=None):
+        """
+        Optional: configure spool-space controller gains/limits on the driver.
+
+        Returns True if the configuration was applied, False otherwise.
+        """
+        return False
