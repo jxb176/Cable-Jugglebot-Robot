@@ -335,6 +335,8 @@ class RobotState:
         self.axes_bus_voltage = [None] * 6
         self.axes_bus_current = [None] * 6
         self.axes_motor_current = [None] * 6
+        self.axes_torque_cmd_nm = [None] * 6
+        self.axes_torque_rsp_nm = [None] * 6
         self.axes_temp_fet = [None] * 6
         self.axes_temp_motor = [None] * 6
         self.axes_axis_error = [None] * 6
@@ -578,6 +580,29 @@ class RobotState:
     def get_motor_current(self):
         with self.lock:
             return list(self.axes_motor_current)
+
+    def set_axis_torque_telemetry(self, torque_cmd_nm=None, torque_rsp_nm=None):
+        with self.lock:
+            if torque_cmd_nm is not None:
+                for i in range(min(6, len(torque_cmd_nm))):
+                    try:
+                        self.axes_torque_cmd_nm[i] = float(torque_cmd_nm[i])
+                    except Exception:
+                        self.axes_torque_cmd_nm[i] = None
+            if torque_rsp_nm is not None:
+                for i in range(min(6, len(torque_rsp_nm))):
+                    try:
+                        self.axes_torque_rsp_nm[i] = float(torque_rsp_nm[i])
+                    except Exception:
+                        self.axes_torque_rsp_nm[i] = None
+
+    def get_axis_torque_command(self):
+        with self.lock:
+            return list(self.axes_torque_cmd_nm)
+
+    def get_axis_torque_response(self):
+        with self.lock:
+            return list(self.axes_torque_rsp_nm)
 
     def get_temp_fet(self):
         with self.lock:
@@ -1138,6 +1163,16 @@ class ControlBridge(threading.Thread):
                             self._publish_platform_estimate(q_cur, qd_cur)
                     except Exception:
                         pass
+                torque_rsp = None
+                if hasattr(self.driver, "get_axis_torques"):
+                    try:
+                        torque_rsp = self.driver.get_axis_torques()
+                    except Exception:
+                        torque_rsp = None
+                self.state.set_axis_torque_telemetry(
+                    torque_cmd_nm=self._last_torque_cmd_nm,
+                    torque_rsp_nm=torque_rsp,
+                )
                 if hasattr(self.driver, "get_comm_stats"):
                     try:
                         cstats = self.driver.get_comm_stats()
@@ -1690,6 +1725,8 @@ def udp_telemetry_sender(state: RobotState, udp_sock, stop_event):
                 bus_v = state.get_bus_voltage() or []
                 bus_i = state.get_bus_current() or []
                 motor_i = state.get_motor_current() or []
+                torque_cmd = state.get_axis_torque_command() or []
+                torque_rsp = state.get_axis_torque_response() or []
                 temp_fet = state.get_temp_fet() or []
                 temp_motor = state.get_temp_motor() or []
                 axis_state = state.get_axis_state() or []
@@ -1706,6 +1743,8 @@ def udp_telemetry_sender(state: RobotState, udp_sock, stop_event):
                     "bus_v": [None if v is None else float(v) for v in bus_v],
                     "bus_i": [None if i is None else float(i) for i in bus_i],
                     "motor_i": [None if x is None else float(x) for x in motor_i],
+                    "torque_cmd_nm": [None if x is None else float(x) for x in torque_cmd],
+                    "torque_rsp_nm": [None if x is None else float(x) for x in torque_rsp],
                     "temp_fet": [None if x is None else float(x) for x in temp_fet],
                     "temp_motor": [None if x is None else float(x) for x in temp_motor],
                     "axis_state": [None if x is None else int(x) for x in axis_state],

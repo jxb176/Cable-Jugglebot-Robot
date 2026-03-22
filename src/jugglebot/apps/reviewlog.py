@@ -177,14 +177,15 @@ def _plot_tensions(data, t, xlabel):
     return fig4, list(axs4)
 
 
-def _plot_torque_and_currents(data, t, xlabel):
-    fig5, axs5 = plt.subplots(2, 3, sharex=True, num="Spool Torque, Motor Current")
+def _plot_torques(data, t, xlabel):
+    fig5, axs5 = plt.subplots(2, 3, sharex=True, num="Spool Torque Command/Response")
     axs5 = axs5.flatten()
     for i in range(6):
         ax = axs5[i]
         ax.plot(t, data[f"spool_cmd_torque_nm_{i + 1}"], label="torque cmd [Nm]", linewidth=1.2)
-        ax.plot(t, data[f"motor_i_{i + 1}"], label="motor i [A]", linewidth=1.0)
+        ax.plot(t, data[f"spool_rsp_torque_nm_{i + 1}"], label="torque rsp [Nm]", linewidth=1.0)
         ax.set_title(f"Spool {i + 1}")
+        ax.set_ylabel("Nm")
         ax.grid(True, alpha=0.3)
     axs5[0].legend(loc="upper right")
     for ax in axs5[-3:]:
@@ -242,7 +243,7 @@ def main() -> None:
     fig_hand_t, fig_hand_r, axs_hand = _plot_hand(data, t, xlabel)
     fig_spool, axs_spool = _plot_spools(data, t, xlabel)
     fig_tension, axs_tension = _plot_tensions(data, t, xlabel)
-    fig_torque, axs_torque = _plot_torque_and_currents(data, t, xlabel)
+    fig_torque, axs_torque = _plot_torques(data, t, xlabel)
     fig_wrench, axs_wrench = _plot_wrench(data, t, xlabel)
     all_axes = [*axs_z_stack, *axs_hand, *axs_spool, *axs_tension, *axs_torque, *axs_wrench]
     _link_x_axes(all_axes)
