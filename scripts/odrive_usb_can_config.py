@@ -51,6 +51,30 @@ HARDCODED_ODRIVES = [
             "node_id": 2,
         },
     },
+    {
+        "name": "odrive_3",
+        "serial_number": "367B33653432",
+        "axis": "axis0",
+        "axis_can_overrides": {
+            "node_id": 3,
+        },
+    },
+    {
+        "name": "odrive_4",
+        "serial_number": "3667336A3432",
+        "axis": "axis0",
+        "axis_can_overrides": {
+            "node_id": 4,
+        },
+    },
+    {
+        "name": "odrive_5",
+        "serial_number": "367733663432",
+        "axis": "axis0",
+        "axis_can_overrides": {
+            "node_id": 5,
+        },
+    },
 ]
 
 
