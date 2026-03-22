@@ -9,6 +9,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
 from dataclasses import dataclass
@@ -25,6 +26,19 @@ GLOBAL_AXIS_CAN_SETTINGS = {
     "temperature_msg_rate_ms": 1000,
     "torques_msg_rate_ms": 4,
     "version_msg_rate_ms": 0,
+}
+
+GLOBAL_AXIS_CONTROLLER_SETTINGS = {
+    "input_filter_bandwidth": 1000.0,
+    "input_mode": 1,
+    "pos_gain": 150.0,
+    "torque_ramp_rate": 0.01,
+    "vel_gain": 0.035,
+    "vel_integrator_gain": 0.0,
+    "vel_integrator_limit": float("inf"),
+    "vel_limit": 60.0,
+    "vel_limit_tolerance": 1.667,
+    "vel_ramp_rate": 10.0,
 }
 
 HARDCODED_ODRIVES = [
@@ -82,7 +96,7 @@ HARDCODED_ODRIVES = [
 @dataclass(frozen=True)
 class PendingChange:
     path: str
-    value: int
+    value: Any
 
 
 def _normalize_serial(serial: str) -> str:
@@ -272,12 +286,15 @@ def _resolve_axis_name(args: argparse.Namespace, device_cfg: dict[str, Any]) -> 
 def _build_changes(args: argparse.Namespace, device_cfg: dict[str, Any]) -> list[PendingChange]:
     axis = _resolve_axis_name(args, device_cfg)
 
-    values: dict[str, int] = {}
+    can_values: dict[str, int] = {}
+    controller_values: dict[str, Any] = {}
     if args.apply_default_can_rates or not args.no_globals:
-        values.update(GLOBAL_AXIS_CAN_SETTINGS)
-    values.update({k: int(v) for k, v in (device_cfg.get("axis_can_overrides") or {}).items()})
+        can_values.update(GLOBAL_AXIS_CAN_SETTINGS)
+        controller_values.update(GLOBAL_AXIS_CONTROLLER_SETTINGS)
+    can_values.update({k: int(v) for k, v in (device_cfg.get("axis_can_overrides") or {}).items()})
+    controller_values.update(device_cfg.get("axis_controller_overrides") or {})
 
-    overrides = {
+    can_overrides = {
         "bus_voltage_msg_rate_ms": args.bus_voltage_msg_rate_ms,
         "encoder_msg_rate_ms": args.encoder_msg_rate_ms,
         "error_msg_rate_ms": args.error_msg_rate_ms,
@@ -289,14 +306,35 @@ def _build_changes(args: argparse.Namespace, device_cfg: dict[str, Any]) -> list
         "torques_msg_rate_ms": args.torques_msg_rate_ms,
         "version_msg_rate_ms": args.version_msg_rate_ms,
     }
-    for key, value in overrides.items():
+    for key, value in can_overrides.items():
         if value is not None:
-            values[key] = int(value)
+            can_values[key] = int(value)
 
-    return [
+    controller_overrides = {
+        "input_filter_bandwidth": args.input_filter_bandwidth,
+        "input_mode": args.input_mode,
+        "pos_gain": args.pos_gain,
+        "torque_ramp_rate": args.torque_ramp_rate,
+        "vel_gain": args.vel_gain,
+        "vel_integrator_gain": args.vel_integrator_gain,
+        "vel_integrator_limit": args.vel_integrator_limit,
+        "vel_limit": args.vel_limit,
+        "vel_limit_tolerance": args.vel_limit_tolerance,
+        "vel_ramp_rate": args.vel_ramp_rate,
+    }
+    for key, value in controller_overrides.items():
+        if value is not None:
+            controller_values[key] = value
+
+    changes = [
         PendingChange(path=f"{axis}.config.can.{name}", value=int(value))
-        for name, value in sorted(values.items())
+        for name, value in sorted(can_values.items())
     ]
+    changes.extend(
+        PendingChange(path=f"{axis}.controller.config.{name}", value=value)
+        for name, value in sorted(controller_values.items())
+    )
+    return changes
 
 
 def _print_change_table(device: Any, changes: list[PendingChange]) -> None:
@@ -315,10 +353,28 @@ def _apply_and_verify(device: Any, changes: list[PendingChange], dry_run: bool) 
 
     for change in changes:
         actual = _read_value(device, change.path)
-        if int(actual) != int(change.value):
+        if not _values_match(actual, change.value):
             raise RuntimeError(
                 f"Verification failed for {change.path}: expected {change.value}, got {actual}"
             )
+
+
+def _values_match(actual: Any, expected: Any) -> bool:
+    if isinstance(expected, int) and not isinstance(expected, bool):
+        try:
+            return int(actual) == expected
+        except Exception:
+            return False
+    try:
+        actual_f = float(actual)
+        expected_f = float(expected)
+    except Exception:
+        return actual == expected
+    if math.isnan(expected_f):
+        return math.isnan(actual_f)
+    if math.isinf(expected_f):
+        return math.isinf(actual_f) and ((actual_f > 0) == (expected_f > 0))
+    return math.isclose(actual_f, expected_f, rel_tol=1e-6, abs_tol=1e-9)
 
 
 def _save_configuration(device: Any) -> None:
@@ -363,6 +419,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--temperature-msg-rate-ms", type=int, default=None)
     parser.add_argument("--torques-msg-rate-ms", type=int, default=None)
     parser.add_argument("--version-msg-rate-ms", type=int, default=None)
+    parser.add_argument("--input-filter-bandwidth", type=float, default=None)
+    parser.add_argument("--input-mode", type=int, default=None)
+    parser.add_argument("--pos-gain", type=float, default=None)
+    parser.add_argument("--torque-ramp-rate", type=float, default=None)
+    parser.add_argument("--vel-gain", type=float, default=None)
+    parser.add_argument("--vel-integrator-gain", type=float, default=None)
+    parser.add_argument("--vel-integrator-limit", type=float, default=None)
+    parser.add_argument("--vel-limit", type=float, default=None)
+    parser.add_argument("--vel-limit-tolerance", type=float, default=None)
+    parser.add_argument("--vel-ramp-rate", type=float, default=None)
     parser.add_argument("--dry-run", action="store_true", help="Print changes without writing them")
     parser.add_argument(
         "--no-save",
