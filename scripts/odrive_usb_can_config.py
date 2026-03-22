@@ -17,13 +17,13 @@ from typing import Any
 
 GLOBAL_AXIS_CAN_SETTINGS = {
     "bus_voltage_msg_rate_ms": 1000,
-    "encoder_msg_rate_ms": 10,
+    "encoder_msg_rate_ms": 4,
     "error_msg_rate_ms": 1000,
     "heartbeat_msg_rate_ms": 0,
     "iq_msg_rate_ms": 100,
     "powers_msg_rate_ms": 0,
     "temperature_msg_rate_ms": 1000,
-    "torques_msg_rate_ms": 0,
+    "torques_msg_rate_ms": 4,
     "version_msg_rate_ms": 0,
 }
 

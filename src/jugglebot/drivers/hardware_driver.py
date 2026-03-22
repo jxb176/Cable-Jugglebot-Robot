@@ -56,6 +56,7 @@ class HardwareDriver(RobotDriver):
         self._axis_pos_turns = [None] * len(self.axis_ids)
         self._axis_vel_turnsps = [None] * len(self.axis_ids)
         self._axis_current_a = [None] * len(self.axis_ids)
+        self._axis_torque_est_nm = [None] * len(self.axis_ids)
         self._axis_torque_cmd_nm = [0.0] * len(self.axis_ids)
         self._axis_pos_cmd_turns = [0.0] * len(self.axis_ids)
         self._axis_vel_ff_turnsps = [0.0] * len(self.axis_ids)
@@ -101,6 +102,7 @@ class HardwareDriver(RobotDriver):
                 axis.on_encoder(lambda pos, vel, i=aid: self._handle_encoder(i, pos, vel))
                 axis.on_bus(lambda vbus, ibus, i=aid: self._handle_bus(i, vbus, ibus))
                 axis.on_iq(lambda iq_set, iq_meas, i=aid: self._handle_current(i, iq_meas))
+                axis.on_torques(lambda target, estimate, i=aid: self._handle_torques(i, target, estimate))
                 axis.on_temp(lambda fet, motor, i=aid: self._handle_temp(i, fet, motor))
                 axis.on_heartbeat(lambda err, st, proc, i=aid: self._handle_heartbeat(i, err, st, proc))
 
@@ -210,20 +212,26 @@ class HardwareDriver(RobotDriver):
             axis.set_absolute_position(position)
 
     def get_axis_torques(self):
-        """Return latest commanded axis torques [Nm]."""
+        """Return latest estimated applied axis torques [Nm]."""
         with self._lock:
-            return [float(x) for x in self._axis_torque_cmd_nm]
+            torques = []
+            for i, torque_nm in enumerate(self._axis_torque_est_nm):
+                if torque_nm is not None and math.isfinite(float(torque_nm)):
+                    torques.append(float(torque_nm))
+                else:
+                    torques.append(float(self._axis_torque_cmd_nm[i]))
+            return torques
 
     def get_cable_tensions(self):
         """
-        Return inferred cable tensions [N] from commanded torque.
+        Return inferred cable tensions [N] from estimated motor torque.
         Positive tension means pulling force along cable.
         """
         scale = self.torque_direction * self.capstan_radius_m
         if abs(scale) < 1e-9:
             return None
-        with self._lock:
-            return [float(tau) / scale for tau in self._axis_torque_cmd_nm]
+        torques = self.get_axis_torques()
+        return [float(tau) / scale for tau in torques]
 
     def get_platform_state(self):
         """
@@ -417,6 +425,12 @@ class HardwareDriver(RobotDriver):
                 self._axis_current_a[idx] = float(current)
         if self._current_callback:
             self._current_callback(axis_id, current)
+
+    def _handle_torques(self, axis_id: int, torque_target: float, torque_estimate: float):
+        idx = self._axis_index.get(axis_id)
+        if idx is not None:
+            with self._lock:
+                self._axis_torque_est_nm[idx] = float(torque_estimate)
 
     def _handle_temp(self, axis_id: int, fet: float, motor: float):
         if self._temp_callback:

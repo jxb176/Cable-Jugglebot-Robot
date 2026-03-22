@@ -20,6 +20,7 @@ class ODriveAxis:
             "encoder": None,
             "bus": None,
             "iq": None,
+            "torques": None,
             "heartbeat": None,
             "error": None,
             "temp": None,
@@ -67,6 +68,9 @@ class ODriveAxis:
     def request_temp(self):
         self.manager._send(self.axis_id, 0x15, b"", rtr=True)
 
+    def request_torques(self):
+        self.manager._send(self.axis_id, 0x1C, b"", rtr=True)
+
     def request_heartbeat(self):
         self.manager._send(self.axis_id, 0x01, b"", rtr=True)
 
@@ -83,6 +87,9 @@ class ODriveAxis:
 
     def on_iq(self, cb):  # cb(iq_set, iq_meas)
         self.callbacks["iq"] = cb
+
+    def on_torques(self, cb):  # cb(torque_target, torque_estimate)
+        self.callbacks["torques"] = cb
 
     def on_heartbeat(self, cb):  # cb(axis_error, axis_state, ctrl_status)
         self.callbacks["heartbeat"] = cb
@@ -119,6 +126,10 @@ class ODriveAxis:
         elif cmd_id == 0x15 and self.callbacks["temp"]:
             fet_temp, motor_temp = struct.unpack("<ff", data)
             self.callbacks["temp"](fet_temp, motor_temp)
+
+        elif cmd_id == 0x1C and self.callbacks["torques"]:
+            torque_target, torque_estimate = struct.unpack("<ff", data)
+            self.callbacks["torques"](torque_target, torque_estimate)
 
 
 class ODriveCanManager:
