@@ -108,8 +108,32 @@ def _serial_int_variants(serial: str) -> set[int]:
 def _serial_variants(serial: str) -> list[Any]:
     normalized = _normalize_serial(serial)
     variants: list[Any] = [serial, normalized]
-    variants.extend(sorted(_serial_int_variants(serial)))
-    return variants
+    ints = sorted(_serial_int_variants(serial))
+    for value in ints:
+        variants.append(value)
+        variants.append(str(value))
+        variants.append(format(value, "x"))
+        variants.append("0x" + format(value, "x"))
+
+    deduped: list[Any] = []
+    seen: set[tuple[type, str]] = set()
+    for item in variants:
+        key = (type(item), str(item))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def _config_serial_int(entry: dict[str, Any]) -> int:
+    serial = str(entry["serial_number"])
+    try:
+        return int(_normalize_serial(serial), 16)
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid hardcoded serial number for {entry.get('name', '<unnamed>')}: {serial}"
+        ) from exc
 
 
 def _device_serial_text(device: Any) -> str | None:
@@ -119,21 +143,32 @@ def _device_serial_text(device: Any) -> str | None:
     return str(serial).strip()
 
 
+def _device_serial_int(device: Any) -> int | None:
+    serial = getattr(device, "serial_number", None)
+    if serial is None:
+        return None
+    try:
+        return int(serial)
+    except Exception:
+        pass
+    variants = _serial_int_variants(str(serial))
+    if len(variants) == 1:
+        return next(iter(variants))
+    return None
+
+
 def _serial_matches(device: Any, expected_serial: str) -> bool:
+    actual_int = _device_serial_int(device)
+    if actual_int is not None:
+        return actual_int in _serial_int_variants(expected_serial)
+
     actual = getattr(device, "serial_number", None)
     if actual is None:
         return False
-
     actual_text = _normalize_serial(str(actual))
-    expected_texts = {_normalize_serial(expected_serial), str(expected_serial).strip().lower()}
-    if actual_text in expected_texts:
-        return True
-
-    try:
-        actual_int = int(actual)
-    except Exception:
-        return False
-    return actual_int in _serial_int_variants(expected_serial)
+    expected_texts = {str(v) for v in _serial_int_variants(expected_serial)}
+    expected_texts.add(_normalize_serial(expected_serial))
+    return actual_text in expected_texts
 
 
 def _connect_odrive(expected_serial: str | None, timeout_s: float):
@@ -216,12 +251,9 @@ def _write_value(root: Any, path: str, value: Any) -> None:
 
 
 def _find_device_config(serial_text: str) -> dict[str, Any] | None:
+    serial_ints = _serial_int_variants(serial_text)
     for entry in HARDCODED_ODRIVES:
-        if _normalize_serial(entry["serial_number"]) == _normalize_serial(serial_text):
-            return entry
-        if _normalize_serial(entry["serial_number"]).startswith("placeholder_serial_"):
-            continue
-        if _serial_int_variants(entry["serial_number"]) & _serial_int_variants(serial_text):
+        if _config_serial_int(entry) in serial_ints:
             return entry
     return None
 
@@ -333,71 +365,117 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Do not call save_configuration() after applying verified changes",
     )
+    parser.add_argument(
+        "--fail-fast",
+        action="store_true",
+        help="Stop on the first device that fails instead of continuing through the device list",
+    )
     return parser.parse_args(argv)
+
+
+def _print_device_table() -> None:
+    for entry in HARDCODED_ODRIVES:
+        serial_hex = _normalize_serial(str(entry["serial_number"])).upper()
+        serial_dec = _config_serial_int(entry)
+        print(
+            f"{entry['name']}: serial=0x{serial_hex} ({serial_dec}), "
+            f"axis={entry.get('axis', 'axis0')}, overrides={entry.get('axis_can_overrides', {})}"
+        )
+
+
+def _selected_device_configs(args: argparse.Namespace) -> list[dict[str, Any]]:
+    if args.serial_number is None:
+        return list(HARDCODED_ODRIVES)
+
+    requested_cfg = _find_device_config(args.serial_number)
+    if requested_cfg is None:
+        raise RuntimeError(
+            f"serial number {args.serial_number} is not present in HARDCODED_ODRIVES"
+        )
+    return [requested_cfg]
+
+
+def _configure_one_device(args: argparse.Namespace, device_cfg: dict[str, Any]) -> None:
+    device = None
+    try:
+        expected_serial = str(device_cfg["serial_number"])
+        device = _connect_odrive(expected_serial, args.timeout_s)
+        serial_text = _device_serial_text(device)
+        serial_int = _device_serial_int(device)
+        if serial_int is not None:
+            print(
+                f"[{device_cfg['name']}] Connected to ODrive serial {serial_text} "
+                f"(0x{serial_int:x})"
+            )
+        else:
+            print(f"[{device_cfg['name']}] Connected to ODrive serial {serial_text}")
+
+        matched_cfg = _find_device_config(serial_text or "")
+        if matched_cfg is None:
+            raise RuntimeError(
+                f"Connected ODrive serial {serial_text} is not present in HARDCODED_ODRIVES"
+            )
+        if matched_cfg is not device_cfg:
+            raise RuntimeError(
+                f"Connected config mismatch: expected {device_cfg['name']}, matched {matched_cfg['name']}"
+            )
+
+        changes = _build_changes(args, device_cfg)
+        if not changes:
+            raise RuntimeError("No parameter changes requested. Check global/per-device config and CLI overrides.")
+
+        _print_change_table(device, changes)
+        _apply_and_verify(device, changes, dry_run=args.dry_run)
+        if args.dry_run:
+            print(f"[{device_cfg['name']}] Dry run complete. No settings were written.")
+            return
+
+        print(f"[{device_cfg['name']}] Verified updated parameters in RAM.")
+        if not args.no_save:
+            print(f"[{device_cfg['name']}] Saving configuration...")
+            try:
+                _save_configuration(device)
+                print(f"[{device_cfg['name']}] Configuration saved.")
+            except Exception as exc:
+                # ODrive may drop the USB connection or reboot during save.
+                print(f"[{device_cfg['name']}] save_configuration() returned with exception: {exc}")
+                print(f"[{device_cfg['name']}] If the device rebooted, reconnect and verify the saved values.")
+        else:
+            print(f"[{device_cfg['name']}] Skipped save_configuration() due to --no-save.")
+    finally:
+        if device is not None:
+            _disconnect_odrive(device)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     if args.list_devices:
-        for entry in HARDCODED_ODRIVES:
-            print(
-                f"{entry['name']}: serial={entry['serial_number']}, "
-                f"axis={entry.get('axis', 'axis0')}, overrides={entry.get('axis_can_overrides', {})}"
-            )
+        _print_device_table()
         return 0
 
-    if args.serial_number is not None:
-        requested_cfg = _find_device_config(args.serial_number)
-        if requested_cfg is None:
-            print(
-                f"ERROR: serial number {args.serial_number} is not present in HARDCODED_ODRIVES",
-                file=sys.stderr,
-            )
-            return 1
-
-    device = None
     try:
-        device = _connect_odrive(args.serial_number, args.timeout_s)
-        serial_text = _device_serial_text(device)
-        print(f"Connected to ODrive serial {serial_text}")
-
-        device_cfg = _find_device_config(serial_text or "")
-        if device_cfg is None:
-            raise RuntimeError(
-                f"Connected ODrive serial {serial_text} is not present in HARDCODED_ODRIVES"
-            )
-
-        print(f"Matched device config: {device_cfg['name']}")
-        changes = _build_changes(args, device_cfg)
-        if not changes:
-            print("No parameter changes requested. Check global/per-device config and CLI overrides.")
-            return 2
-
-        _print_change_table(device, changes)
-        _apply_and_verify(device, changes, dry_run=args.dry_run)
-        if args.dry_run:
-            print("Dry run complete. No settings were written.")
-            return 0
-
-        print("Verified updated parameters in RAM.")
-        if not args.no_save:
-            print("Saving configuration...")
-            try:
-                _save_configuration(device)
-                print("Configuration saved.")
-            except Exception as exc:
-                # ODrive may drop the USB connection or reboot during save.
-                print(f"save_configuration() returned with exception: {exc}")
-                print("If the device rebooted, reconnect and verify the saved values.")
-        else:
-            print("Skipped save_configuration() due to --no-save.")
-        return 0
+        selected = _selected_device_configs(args)
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-    finally:
-        if device is not None:
-            _disconnect_odrive(device)
+
+    failures: list[tuple[str, str]] = []
+    for device_cfg in selected:
+        print(f"[{device_cfg['name']}] Starting configuration")
+        try:
+            _configure_one_device(args, device_cfg)
+        except Exception as exc:
+            failures.append((device_cfg["name"], str(exc)))
+            print(f"[{device_cfg['name']}] ERROR: {exc}", file=sys.stderr)
+            if args.fail_fast:
+                break
+
+    successes = len(selected) - len(failures)
+    print(f"Summary: {successes} succeeded, {len(failures)} failed.")
+    for name, message in failures:
+        print(f"  {name}: {message}", file=sys.stderr)
+
+    return 0 if not failures else 1
 
 
 if __name__ == "__main__":
