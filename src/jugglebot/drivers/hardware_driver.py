@@ -241,6 +241,12 @@ class HardwareDriver(RobotDriver):
         if any(v is None for v in pos) or any(v is None for v in vel):
             return None, None
 
+        pos_arr = np.asarray(pos, dtype=float)
+        vel_arr = np.asarray(vel, dtype=float)
+        if not np.all(np.isfinite(pos_arr)) or not np.all(np.isfinite(vel_arr)):
+            logger.debug("Platform-state estimator skipped due to non-finite encoder feedback")
+            return q_cached, qd_cached
+
         now = time.perf_counter()
         if (now - t_cached) < self._pose_update_dt:
             return q_cached, qd_cached
@@ -257,11 +263,24 @@ class HardwareDriver(RobotDriver):
             dtype=float,
         )
 
+        if (
+            not np.all(np.isfinite(L_meas_m))
+            or not np.all(np.isfinite(Ldot_meas_mps))
+            or not np.all(np.isfinite(q_cached))
+            or not np.all(np.isfinite(qd_cached))
+        ):
+            logger.debug("Platform-state estimator skipped due to non-finite derived cable state")
+            return q_cached, qd_cached
+
         try:
             q_new = self._solve_pose_from_lengths(L_meas_m, q_cached)
             J = self._cable_lengths_jacobian_pose5_fd(q_new)
+            if not np.all(np.isfinite(J)):
+                raise ValueError("non-finite estimator Jacobian")
             qd_new, *_ = np.linalg.lstsq(J, Ldot_meas_mps, rcond=None)
             qd_new = np.asarray(qd_new, dtype=float)
+            if not np.all(np.isfinite(qd_new)):
+                raise ValueError("non-finite platform velocity estimate")
         except Exception as exc:
             logger.debug(f"Platform-state estimator failed: {exc}")
             return q_cached, qd_cached
@@ -372,10 +391,15 @@ class HardwareDriver(RobotDriver):
     # Internal callback handlers
     def _handle_encoder(self, axis_id: int, pos: float, vel: float):
         idx = self._axis_index.get(axis_id)
+        pos = float(pos)
+        vel = float(vel)
+        if not math.isfinite(pos) or not math.isfinite(vel):
+            logger.warning(f"Ignoring non-finite encoder feedback on axis {axis_id}: pos={pos}, vel={vel}")
+            return
         if idx is not None:
             with self._lock:
-                self._axis_pos_turns[idx] = float(pos)
-                self._axis_vel_turnsps[idx] = float(vel)
+                self._axis_pos_turns[idx] = pos
+                self._axis_vel_turnsps[idx] = vel
                 self._enc_times_axes[idx].append(time.perf_counter())
         if self._position_callback:
             self._position_callback(axis_id, pos)
@@ -428,12 +452,18 @@ class HardwareDriver(RobotDriver):
 
     def _solve_pose_from_lengths(self, L_meas_m, q_seed):
         q = np.asarray(q_seed, dtype=float).copy()
+        if not np.all(np.isfinite(L_meas_m)) or not np.all(np.isfinite(q)):
+            raise ValueError("non-finite pose-solver inputs")
         q[2] = max(-0.6, min(0.6, q[2]))
         for _ in range(4):
             L_pred = self._cable_lengths_m_from_pose5(q)
             r = np.asarray(L_meas_m, dtype=float) - L_pred
             J = self._cable_lengths_jacobian_pose5_fd(q)
+            if not np.all(np.isfinite(r)) or not np.all(np.isfinite(J)):
+                raise ValueError("non-finite pose-solver Jacobian/residual")
             dq, *_ = np.linalg.lstsq(J, r, rcond=None)
+            if not np.all(np.isfinite(dq)):
+                raise ValueError("non-finite pose-solver step")
 
             # Keep the solver stable under noisy feedback.
             dq[0:3] = np.clip(dq[0:3], -0.01, 0.01)

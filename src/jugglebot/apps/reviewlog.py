@@ -83,6 +83,45 @@ def _select_time_axis(data):
     return data["t_rel_s"], "wall time [s]"
 
 
+def _finite_gradient(y, t):
+    out = np.full_like(y, np.nan, dtype=float)
+    finite = np.isfinite(y) & np.isfinite(t)
+    if finite.sum() < 2:
+        return out
+    y_f = y[finite]
+    t_f = t[finite]
+    if np.any(np.diff(t_f) <= 0.0):
+        return out
+    out[finite] = np.gradient(y_f, t_f)
+    return out
+
+
+def _plot_z_stack(data, t, xlabel):
+    fig, axs = plt.subplots(3, 1, sharex=True, num="Hand Z Stack")
+
+    axs[0].plot(t, data["hand_cmd_z_mm"], label="cmd", linewidth=1.3)
+    axs[0].plot(t, data["hand_rsp_z_mm"], label="rsp", linewidth=1.0)
+    axs[0].set_ylabel("z [mm]")
+    axs[0].grid(True, alpha=0.3)
+    axs[0].legend(loc="upper right")
+
+    axs[1].plot(t, data["hand_cmd_vz_mps"], label="cmd", linewidth=1.3)
+    axs[1].plot(t, data["hand_rsp_vz_mps"], label="rsp", linewidth=1.0)
+    axs[1].set_ylabel("vz [m/s]")
+    axs[1].grid(True, alpha=0.3)
+    axs[1].legend(loc="upper right")
+
+    rsp_az = _finite_gradient(data["hand_rsp_vz_mps"], t)
+    axs[2].plot(t, data["hand_cmd_az_mps2"], label="cmd", linewidth=1.3)
+    axs[2].plot(t, rsp_az, label="rsp (derived)", linewidth=1.0)
+    axs[2].set_ylabel("az [m/s^2]")
+    axs[2].set_xlabel(xlabel)
+    axs[2].grid(True, alpha=0.3)
+    axs[2].legend(loc="upper right")
+
+    return fig, list(axs)
+
+
 def _plot_hand(data, t, xlabel):
     fig1, axs1 = plt.subplots(3, 1, sharex=True, num="Hand Translation")
     labels = [("x", "x_mm"), ("y", "y_mm"), ("z", "z_mm")]
@@ -199,14 +238,15 @@ def main() -> None:
     print(f"Loaded {len(data['t_rel_s'])} samples from {log_path}")
     t, xlabel = _select_time_axis(data)
 
+    fig_z_stack, axs_z_stack = _plot_z_stack(data, t, xlabel)
     fig_hand_t, fig_hand_r, axs_hand = _plot_hand(data, t, xlabel)
     fig_spool, axs_spool = _plot_spools(data, t, xlabel)
     fig_tension, axs_tension = _plot_tensions(data, t, xlabel)
     fig_torque, axs_torque = _plot_torque_and_currents(data, t, xlabel)
     fig_wrench, axs_wrench = _plot_wrench(data, t, xlabel)
-    all_axes = [*axs_hand, *axs_spool, *axs_tension, *axs_torque, *axs_wrench]
+    all_axes = [*axs_z_stack, *axs_hand, *axs_spool, *axs_tension, *axs_torque, *axs_wrench]
     _link_x_axes(all_axes)
-    figs = [fig_hand_t, fig_hand_r, fig_spool, fig_tension, fig_torque]
+    figs = [fig_z_stack, fig_hand_t, fig_hand_r, fig_spool, fig_tension, fig_torque]
     if fig_wrench is not None:
         figs.append(fig_wrench)
     _install_exit_hotkeys(figs)
