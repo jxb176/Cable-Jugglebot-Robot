@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -183,20 +184,23 @@ def _connect_odrive(expected_serial: str | None, timeout_s: float):
     last_error = None
     if expected_serial is None:
         try:
-            try:
-                device = odrive.find_any(timeout=timeout_s)
-            except TypeError:
-                device = odrive.find_any()
+            device = odrive.find_any(timeout=timeout_s)
         except Exception as exc:
             last_error = exc
             device = None
     else:
-        for candidate in _serial_variants(expected_serial):
+        deadline = time.monotonic() + timeout_s
+        candidates = _serial_variants(expected_serial)
+        for idx, candidate in enumerate(candidates, start=1):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            print(
+                f"  Looking for serial {expected_serial} "
+                f"(candidate {idx}/{len(candidates)}: {candidate}, timeout {remaining:.1f}s)"
+            )
             try:
-                try:
-                    device = odrive.find_any(serial_number=candidate, timeout=timeout_s)
-                except TypeError:
-                    device = odrive.find_any(serial_number=candidate)
+                device = odrive.find_any(serial_number=candidate, timeout=remaining)
             except Exception as exc:
                 last_error = exc
                 device = None
@@ -335,7 +339,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--timeout-s",
         type=float,
-        default=10.0,
+        default=1.0,
         help="USB discovery timeout in seconds",
     )
     parser.add_argument(
