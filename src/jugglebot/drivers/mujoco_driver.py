@@ -17,7 +17,7 @@ from .driver_interface import RobotDriver
 logger = logging.getLogger(__name__)
 
 DEFAULT_MM_PER_TURN = -62.832
-DEFAULT_TORQUE_PER_TENSION_NM_PER_N = -0.01
+DEFAULT_TORQUE_PER_TENSION_NM_PER_N = 0.01
 
 
 class MuJoCoSimulationDriver(RobotDriver):

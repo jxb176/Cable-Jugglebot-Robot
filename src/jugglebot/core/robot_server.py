@@ -36,7 +36,7 @@ TELEMETRY_RATE_HZ = 50.0
 MM_PER_TURN = [-62.832] * 6  # 2*pi*10mm = 62.832 mm/turn, with sign convention applied
 # Pretension mapping: tension [N] -> capstan torque [Nm]
 CAPSTAN_RADIUS_M = 0.010  # 10 mm
-MOTOR_TORQUE_DIRECTION = -1  # Set to -1 if positive motor torque winds the cable and increases tension, +1 if opposite. This depends on your motor/winch wiring and should be set to ensure that positive torque commands increase tension.
+MOTOR_TORQUE_DIRECTION = 1  # Positive motor torque should reel in cable and increase tension on hardware.
 TORQUE_PER_TENSION = MOTOR_TORQUE_DIRECTION * CAPSTAN_RADIUS_M  # Nm per N  (T = F*r)
 TORQUE_CTRL_KP_N_PER_MM = 0.6
 TORQUE_CTRL_KD_N_PER_MMPS = 0.02
