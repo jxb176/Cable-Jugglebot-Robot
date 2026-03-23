@@ -33,7 +33,7 @@ GLOBAL_AXIS_CONTROLLER_SETTINGS = {
     "input_mode": 3,
     "pos_gain": 50.0,
     "torque_ramp_rate": 0.01,
-    "vel_gain": 0.035,
+    "vel_gain": 0.01,
     "vel_integrator_gain": 0.0,
     "vel_integrator_limit": float("inf"),
     "vel_limit": 60.0,
