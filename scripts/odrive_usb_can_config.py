@@ -29,9 +29,9 @@ GLOBAL_AXIS_CAN_SETTINGS = {
 }
 
 GLOBAL_AXIS_CONTROLLER_SETTINGS = {
-    "input_filter_bandwidth": 1000.0,
-    "input_mode": 1,
-    "pos_gain": 150.0,
+    "input_filter_bandwidth": 150.0,
+    "input_mode": 3,
+    "pos_gain": 50.0,
     "torque_ramp_rate": 0.01,
     "vel_gain": 0.035,
     "vel_integrator_gain": 0.0,
