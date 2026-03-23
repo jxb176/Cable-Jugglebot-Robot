@@ -30,12 +30,12 @@ controller:
   spool_space:
     kp: [0.377, 0.377, 0.377, 0.377, 0.377, 0.377]
     kd: [0.0126, 0.0126, 0.0126, 0.0126, 0.0126, 0.0126]
-    enable_torque_feedforward: true
+    enable_torque_feedforward: false
     bias_tension_N: [12.0, 12.0, 12.0, 12.0, 12.0, 12.0]
     torque_limit_nm: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     outer_taskspace_correction:
-      kp: [1.0, 1.0, 1.0, 0.35, 0.35]
-      kd: [0.15, 0.15, 0.15, 0.05, 0.05]
+      kp: [0.0, 0.0, 0.0, 0.0, 0.0]
+      kd: [0.0, 0.0, 0.0, 0.0, 0.0]
       cable_clip_m: [0.10, 0.10, 0.10, 0.10, 0.10, 0.10]
     nullspace_tension:
       kp: 0.001
