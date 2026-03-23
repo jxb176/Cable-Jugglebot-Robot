@@ -193,6 +193,35 @@ def _plot_torques(data, t, xlabel):
     return fig5, list(axs5)
 
 
+def _plot_nullspace(data, t, xlabel):
+    needed = ["null_sigma_ref_N", "null_sigma_meas_N", "null_eta_m"]
+    needed.extend([f"spool_null_cmd_mm_{i + 1}" for i in range(6)])
+    if any(k not in data for k in needed):
+        return None, []
+
+    fig, axs = plt.subplots(3, 1, sharex=True, num="Nullspace Tension Controller")
+
+    axs[0].plot(t, data["null_sigma_ref_N"], label="sigma ref", linewidth=1.3)
+    axs[0].plot(t, data["null_sigma_meas_N"], label="sigma meas", linewidth=1.0)
+    axs[0].set_ylabel("sigma [N]")
+    axs[0].grid(True, alpha=0.3)
+    axs[0].legend(loc="upper right")
+
+    axs[1].plot(t, 1000.0 * data["null_eta_m"], label="eta", linewidth=1.3)
+    axs[1].set_ylabel("eta [mm]")
+    axs[1].grid(True, alpha=0.3)
+    axs[1].legend(loc="upper right")
+
+    for i in range(6):
+        axs[2].plot(t, data[f"spool_null_cmd_mm_{i + 1}"], label=f"A{i + 1}", linewidth=1.0)
+    axs[2].set_ylabel("dL_null [mm]")
+    axs[2].set_xlabel(xlabel)
+    axs[2].grid(True, alpha=0.3)
+    axs[2].legend(loc="upper right", ncol=3)
+
+    return fig, list(axs)
+
+
 def _plot_wrench(data, t, xlabel):
     needed = [
         "wrench_cmd_fx_N", "wrench_rsp_fx_N",
@@ -244,10 +273,13 @@ def main() -> None:
     fig_spool, axs_spool = _plot_spools(data, t, xlabel)
     fig_tension, axs_tension = _plot_tensions(data, t, xlabel)
     fig_torque, axs_torque = _plot_torques(data, t, xlabel)
+    fig_nullspace, axs_nullspace = _plot_nullspace(data, t, xlabel)
     fig_wrench, axs_wrench = _plot_wrench(data, t, xlabel)
-    all_axes = [*axs_z_stack, *axs_hand, *axs_spool, *axs_tension, *axs_torque, *axs_wrench]
+    all_axes = [*axs_z_stack, *axs_hand, *axs_spool, *axs_tension, *axs_torque, *axs_nullspace, *axs_wrench]
     _link_x_axes(all_axes)
     figs = [fig_z_stack, fig_hand_t, fig_hand_r, fig_spool, fig_tension, fig_torque]
+    if fig_nullspace is not None:
+        figs.append(fig_nullspace)
     if fig_wrench is not None:
         figs.append(fig_wrench)
     _install_exit_hotkeys(figs)

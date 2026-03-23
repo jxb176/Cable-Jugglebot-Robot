@@ -216,6 +216,71 @@ def solve_tensions_least_squares(J_len_plat, tau_plat_des, T_prev):
         T = np.clip(T - step * grad, lb, ub)
     return T
 
+
+def cable_tension_nullspace_basis(J_len_plat, n_prev=None):
+    """
+    Return a unit basis vector n in Null(J^T) for J shape (6,5).
+
+    The sign is chosen for continuity against n_prev when available.
+    """
+    J = np.asarray(J_len_plat, dtype=float)
+    if J.shape != (6, 5):
+        raise ValueError(f"Expected J shape (6,5), got {J.shape}")
+    _, s, vh = np.linalg.svd(J.T, full_matrices=True)
+    n = np.asarray(vh[-1, :], dtype=float)
+    n_norm = float(np.linalg.norm(n))
+    if n_norm < 1e-9:
+        raise ValueError("Degenerate cable nullspace basis")
+    n = n / n_norm
+    if n_prev is not None:
+        n_prev = np.asarray(n_prev, dtype=float)
+        if n_prev.shape == n.shape and np.all(np.isfinite(n_prev)) and float(n_prev @ n) < 0.0:
+            n = -n
+    return n
+
+
+def nullspace_sigma_interval(T_particular, n, tension_floor_N):
+    """
+    Feasible interval for sigma in T = T_particular + n*sigma subject to T >= tension_floor_N.
+    Returns (lower, upper, feasible).
+    """
+    T_particular = np.asarray(T_particular, dtype=float)
+    n = np.asarray(n, dtype=float)
+    lower = -float("inf")
+    upper = float("inf")
+    eps = 1e-9
+    for Ti, ni in zip(T_particular, n):
+        if ni > eps:
+            lower = max(lower, (float(tension_floor_N) - float(Ti)) / float(ni))
+        elif ni < -eps:
+            upper = min(upper, (float(tension_floor_N) - float(Ti)) / float(ni))
+        elif float(Ti) < float(tension_floor_N):
+            return lower, upper, False
+    return lower, upper, lower <= upper
+
+
+def clamp_sigma_to_interval(sigma_ref, lower, upper):
+    sigma_ref = float(sigma_ref)
+    if math.isfinite(lower):
+        sigma_ref = max(sigma_ref, float(lower))
+    if math.isfinite(upper):
+        sigma_ref = min(sigma_ref, float(upper))
+    return sigma_ref
+
+
+def rate_limit_scalar(target, current, rate_limit_per_s, dt):
+    target = float(target)
+    current = float(current)
+    rate_limit_per_s = abs(float(rate_limit_per_s))
+    dt = max(0.0, float(dt))
+    if not math.isfinite(target):
+        return current
+    if not math.isfinite(current) or dt <= 0.0 or rate_limit_per_s <= 0.0:
+        return target
+    max_step = rate_limit_per_s * dt
+    delta = float(np.clip(target - current, -max_step, max_step))
+    return current + delta
+
 def _coerce_vec6_to_mm(msg, field_name: str):
     vec = msg.get(field_name, [])
     units = (msg.get("units") or "mm").lower()
@@ -1045,9 +1110,14 @@ class ControlBridge(threading.Thread):
         self._diag_start_perf = None
         self._diag_last_log_perf = 0.0
         self._last_spool_cmd_mm = [float("nan")] * 6
+        self._last_spool_pose_cmd_mm = [float("nan")] * 6
+        self._last_spool_null_cmd_mm = [0.0] * 6
         self._last_torque_cmd_nm = [0.0] * 6
         self._last_tension_cmd_N = [0.0] * 6
         self._last_tau_plat_des = np.full(5, np.nan, dtype=float)
+        self._last_sigma_ref = float("nan")
+        self._last_sigma_meas = float("nan")
+        self._last_eta_null_m = 0.0
         self._sim_time_s = float("nan")
         self._sim_rt_factor = float("nan")
         self._sim_time_prev = None
@@ -1087,6 +1157,17 @@ class ControlBridge(threading.Thread):
             _expand_axis_values(outer_cfg.get("cable_clip_m"), OUTER_CORR_CABLE_CLIP_M, axis_count=len(self.axis_ids)),
             dtype=float,
         )
+        null_cfg = controller_cfg.get("nullspace_tension") or {}
+        self._null_tension_kp = float(null_cfg.get("kp", 0.001))
+        self._null_tension_ki = float(null_cfg.get("ki", 0.0))
+        self._null_eta_limit_m = abs(float(null_cfg.get("eta_limit_m", 0.02)))
+        self._null_sigma_ref_base = float(null_cfg.get("sigma_ref_N", 0.0))
+        self._null_sigma_rate_limit_Nps = abs(float(null_cfg.get("sigma_rate_limit_Nps", 10.0)))
+        self._null_tension_floor_N = float(null_cfg.get("tmin_N", TASK_TMIN_N))
+        self._eta_null_m = 0.0
+        self._eta_null_int = 0.0
+        self._sigma_ref_state = float(self._null_sigma_ref_base)
+        self._null_basis_prev = None
         self._enable_position_torque_ff = bool(controller_cfg.get("enable_torque_feedforward", True))
         self._spool_kp_runtime = list(self._spool_kp_base)
         self._spool_kd_runtime = list(self._spool_kd_base)
@@ -1252,6 +1333,7 @@ class ControlBridge(threading.Thread):
 
     def _run_taskspace_spool_control(self):
         """Generate spool references from task-space commands and use local axis position loops."""
+        now = time.perf_counter()
         t_mm_cmd, q_cmd, v_cmd_mps, a_cmd_mps2 = self.state.get_hand_motion()
         roll_cmd, pitch_cmd, _ = quat_to_rpy_rad(q_cmd)
         q_ref = np.array(
@@ -1261,7 +1343,10 @@ class ControlBridge(threading.Thread):
         qd_ref = np.array([float(v_cmd_mps[0]), float(v_cmd_mps[1]), float(v_cmd_mps[2]), 0.0, 0.0], dtype=float)
         qdd_ff = np.array([float(a_cmd_mps2[0]), float(a_cmd_mps2[1]), float(a_cmd_mps2[2]), 0.0, 0.0], dtype=float)
         cable_mm = pose_to_cable_lengths_mm(GEOM, t_mm_cmd, q_cmd)
-        cmd_m = np.asarray([(cable_mm[i] - HOME_CABLE_MM[i]) / 1000.0 for i in range(6)], dtype=float)
+        pose_ref_m = np.asarray([(cable_mm[i] - HOME_CABLE_MM[i]) / 1000.0 for i in range(6)], dtype=float)
+        pose_corr_m = np.zeros(6, dtype=float)
+        null_cmd_m = np.zeros(6, dtype=float)
+        J_outer = None
 
         q_cur = None
         qd_cur = None
@@ -1284,13 +1369,84 @@ class ControlBridge(threading.Thread):
             cur_cmd_m = np.asarray(cur_lengths_m, dtype=float) - (np.asarray(HOME_CABLE_MM, dtype=float) / 1000.0)
             cable_corr_m = J_outer @ ((self._outer_corr_kp @ e) + (self._outer_corr_kd @ ed))
             cable_corr_m = np.clip(cable_corr_m, -self._outer_corr_cable_clip_m, self._outer_corr_cable_clip_m)
-            cmd_m = cur_cmd_m + cable_corr_m
+            pose_corr_m = (cur_cmd_m - pose_ref_m) + cable_corr_m
 
+        J_cmd = cable_lengths_jacobian_pose5_fd(q_ref)
+        J_null = J_outer if J_outer is not None and np.shape(J_outer) == (6, 5) else J_cmd
+
+        tau_plat_ff = np.asarray(qdd_ff, dtype=float)
+        tau_plat_ff[2] += TASK_GRAVITY_FF_Z_N
+        T_particular = solve_tensions_least_squares(J_cmd, tau_plat_ff, self._T_prev)
+        self._T_prev = T_particular.copy()
+        T_cmd = np.maximum(np.asarray(self._spool_bias_tension_N, dtype=float), T_particular)
+        self._last_tau_plat_des = np.asarray(tau_plat_ff, dtype=float)
+        self._last_tension_cmd_N = [float(x) for x in T_cmd]
+        if self._task_last_t is None:
+            dt = 0.0
+        else:
+            dt = max(0.0, min(0.1, float(now - self._task_last_t)))
+
+        sigma_meas = float("nan")
+        sigma_ref = float("nan")
+        if np.shape(J_null) == (6, 5):
+            try:
+                n = cable_tension_nullspace_basis(J_null, self._null_basis_prev)
+                self._null_basis_prev = n.copy()
+                lower, upper, feasible = nullspace_sigma_interval(
+                    T_cmd,
+                    n,
+                    self._null_tension_floor_N,
+                )
+                sigma_target = float(self._null_sigma_ref_base)
+                if feasible:
+                    if math.isfinite(lower) and math.isfinite(upper):
+                        sigma_target = 0.5 * (float(lower) + float(upper))
+                    else:
+                        sigma_target = clamp_sigma_to_interval(self._null_sigma_ref_base, lower, upper)
+                    sigma_ref = clamp_sigma_to_interval(
+                        rate_limit_scalar(
+                            sigma_target,
+                            self._sigma_ref_state,
+                            self._null_sigma_rate_limit_Nps,
+                            dt,
+                        ),
+                        lower,
+                        upper,
+                    )
+                else:
+                    sigma_ref = sigma_target
+                self._sigma_ref_state = float(sigma_ref)
+                T_meas = None
+                if hasattr(self.driver, "get_cable_tensions"):
+                    try:
+                        T_meas = self.driver.get_cable_tensions()
+                    except Exception:
+                        T_meas = None
+                if T_meas is not None:
+                    T_meas = np.asarray(T_meas, dtype=float)
+                    if T_meas.shape == (6,) and np.all(np.isfinite(T_meas)):
+                        sigma_meas = float(n @ T_meas)
+                if np.isfinite(sigma_meas) and dt > 0.0:
+                    sigma_err = float(sigma_ref - sigma_meas)
+                    self._eta_null_int += sigma_err * dt
+                    eta_dot = self._null_tension_kp * sigma_err + self._null_tension_ki * self._eta_null_int
+                    self._eta_null_m += dt * eta_dot
+                    self._eta_null_m = float(np.clip(self._eta_null_m, -self._null_eta_limit_m, self._null_eta_limit_m))
+                null_cmd_m = n * float(self._eta_null_m)
+            except Exception as exc:
+                logger.debug(f"[CTRL] Null-space tension controller skipped: {exc}")
+
+        cmd_m = pose_ref_m + pose_corr_m + null_cmd_m
         cmd_mm = [1000.0 * float(v) for v in cmd_m]
         self._last_spool_cmd_mm = [float(x) for x in cmd_mm]
+        self._last_spool_pose_cmd_mm = [1000.0 * float(v) for v in (pose_ref_m + pose_corr_m)]
+        self._last_spool_null_cmd_mm = [1000.0 * float(v) for v in null_cmd_m]
+        self._last_sigma_ref = float(sigma_ref)
+        self._last_sigma_meas = float(sigma_meas)
+        self._last_eta_null_m = float(self._eta_null_m)
+        self._task_last_t = now
 
         cmd_turns = [float(cmd_mm[i]) / float(self._mm_per_turn[i]) for i in range(len(self.axis_ids))]
-        J_cmd = cable_lengths_jacobian_pose5_fd(q_ref)
         cable_vel_mps = J_cmd @ qd_ref
         vel_turnsps = []
         for i in range(len(self.axis_ids)):
@@ -1300,13 +1456,6 @@ class ControlBridge(threading.Thread):
             else:
                 vel_turnsps.append(float(1000.0 * cable_vel_mps[i]) / mm_per_turn)
 
-        tau_plat_ff = np.asarray(qdd_ff, dtype=float)
-        tau_plat_ff[2] += TASK_GRAVITY_FF_Z_N
-        T_ff = solve_tensions_least_squares(J_cmd, tau_plat_ff, self._T_prev)
-        self._T_prev = T_ff.copy()
-        T_cmd = np.maximum(np.asarray(self._spool_bias_tension_N, dtype=float), T_ff)
-        self._last_tau_plat_des = np.asarray(tau_plat_ff, dtype=float)
-        self._last_tension_cmd_N = [float(x) for x in T_cmd]
         torque_ff = [float(TORQUE_PER_TENSION) * float(tension) for tension in T_cmd]
         if not self._enable_position_torque_ff:
             torque_ff = [0.0] * len(torque_ff)
@@ -1426,6 +1575,14 @@ class ControlBridge(threading.Thread):
                 self._last_tau_plat_des[:] = np.nan
                 self._task_err_int[:] = 0.0
                 self._task_last_t = None
+                self._eta_null_m = 0.0
+                self._eta_null_int = 0.0
+                self._null_basis_prev = None
+                self._sigma_ref_state = float(self._null_sigma_ref_base)
+                self._last_sigma_ref = float("nan")
+                self._last_sigma_meas = float("nan")
+                self._last_eta_null_m = 0.0
+                self._last_spool_null_cmd_mm = [0.0] * 6
 
         except Exception as e:
             logger.error(f"[CTRL] _apply_state error: {e}")
@@ -1528,7 +1685,14 @@ class ControlBridge(threading.Thread):
             "wrench_rsp_fz_N",
             "wrench_rsp_tx_Nm",
             "wrench_rsp_ty_Nm",
+            "null_sigma_ref_N",
+            "null_sigma_meas_N",
+            "null_eta_m",
         ]
+        for i in range(6):
+            headers.append(f"spool_pose_cmd_mm_{i + 1}")
+        for i in range(6):
+            headers.append(f"spool_null_cmd_mm_{i + 1}")
         for i in range(6):
             headers.append(f"spool_cmd_mm_{i + 1}")
         for i in range(6):
@@ -1719,8 +1883,13 @@ class ControlBridge(threading.Thread):
             self._float_or_nan(tau_rsp[2]),
             self._float_or_nan(tau_rsp[3]),
             self._float_or_nan(tau_rsp[4]),
+            self._float_or_nan(self._last_sigma_ref),
+            self._float_or_nan(self._last_sigma_meas),
+            self._float_or_nan(self._last_eta_null_m),
         ]
 
+        row.extend([self._float_or_nan(v) for v in self._last_spool_pose_cmd_mm])
+        row.extend([self._float_or_nan(v) for v in self._last_spool_null_cmd_mm])
         row.extend([self._float_or_nan(v) for v in self._last_spool_cmd_mm])
         row.extend([self._float_or_nan(v) for v in spool_rsp_mm])
         row.extend([self._float_or_nan(v) for v in spool_rsp_mmps])
