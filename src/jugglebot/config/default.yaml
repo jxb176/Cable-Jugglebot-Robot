@@ -34,7 +34,7 @@ controller:
     bias_tension_N: [12.0, 12.0, 12.0, 12.0, 12.0, 12.0]
     torque_limit_nm: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     outer_taskspace_correction:
-      kp: [0.0, 0.0, 0.0, 0.0, 0.0]
+      kp: [1.0, 1.0, 1.0, 0.35, 0.35]
       kd: [0.0, 0.0, 0.0, 0.0, 0.0]
       cable_clip_m: [0.10, 0.10, 0.10, 0.10, 0.10, 0.10]
     nullspace_tension:
