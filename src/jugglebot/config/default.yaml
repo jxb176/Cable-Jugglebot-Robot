@@ -2,7 +2,7 @@ robot:
   name: cable_jugglebot_v1
   control_rate_hz: 200
   units: SI
-  mode: simulation  # or 'hardware'
+  mode: hardware  # or 'simulation'
   auto_enable_on_startup: false
 
 geometry:
