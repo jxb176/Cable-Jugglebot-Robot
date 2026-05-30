@@ -31,6 +31,106 @@ TCP_CMD_PORT = 5555
 UDP_TELEM_PORT = 5556
 UDP_RECV_BUFFER_BYTES = 65535
 
+
+def _float_or_none(value):
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _float_or_nan(value):
+    val = _float_or_none(value)
+    return float("nan") if val is None else val
+
+
+def _vec_get(values, index, default=None):
+    try:
+        return values[index]
+    except Exception:
+        return default
+
+
+def _pose_state_to_legacy_pose(pose_state):
+    if not isinstance(pose_state, dict):
+        return []
+    pos_m = pose_state.get("position_m") or []
+    rpy_rad = pose_state.get("orientation_rpy_rad") or []
+    return [
+        1000.0 * _float_or_nan(_vec_get(pos_m, 0, float("nan"))),
+        1000.0 * _float_or_nan(_vec_get(pos_m, 1, float("nan"))),
+        1000.0 * _float_or_nan(_vec_get(pos_m, 2, float("nan"))),
+        math.degrees(_float_or_nan(_vec_get(rpy_rad, 0, float("nan")))),
+        math.degrees(_float_or_nan(_vec_get(rpy_rad, 1, float("nan")))),
+        math.degrees(_float_or_nan(_vec_get(rpy_rad, 2, float("nan")))),
+    ]
+
+
+def _pose_state_to_legacy_velocity(pose_state):
+    if not isinstance(pose_state, dict):
+        return []
+    lin = pose_state.get("linear_velocity_mps") or []
+    ang = pose_state.get("angular_velocity_rps") or []
+    return [
+        _float_or_nan(_vec_get(lin, 0, float("nan"))),
+        _float_or_nan(_vec_get(lin, 1, float("nan"))),
+        _float_or_nan(_vec_get(lin, 2, float("nan"))),
+        math.degrees(_float_or_nan(_vec_get(ang, 0, float("nan")))),
+        math.degrees(_float_or_nan(_vec_get(ang, 1, float("nan")))),
+        math.degrees(_float_or_nan(_vec_get(ang, 2, float("nan")))),
+    ]
+
+
+def _actuator_field_vec(actuators, field_name):
+    values = []
+    if not isinstance(actuators, list):
+        actuators = []
+    for i in range(6):
+        axis = actuators[i] if i < len(actuators) and isinstance(actuators[i], dict) else {}
+        values.append(axis.get(field_name))
+    return values
+
+
+def _normalize_telemetry(telem):
+    if not isinstance(telem, dict):
+        return {}
+    if "pos" in telem or "vel" in telem or "hand_est_pose" in telem:
+        return telem
+
+    actuators = telem.get("actuators") or []
+    bus_stats = telem.get("bus_stats") or {}
+    normalized = {
+        "t": telem.get("timestamp_s", time.time()),
+        "pos": [1000.0 * _float_or_nan(v) for v in (telem.get("cable_lengths_m") or [])],
+        "vel": [1000.0 * _float_or_nan(v) for v in (telem.get("cable_velocities_mps") or [])],
+        "temp_fet": _actuator_field_vec(actuators, "temperature_fet_c"),
+        "temp_motor": _actuator_field_vec(actuators, "temperature_motor_c"),
+        "bus_i": _actuator_field_vec(actuators, "bus_current_a"),
+        "motor_i": _actuator_field_vec(actuators, "current_estimate_a"),
+        "torque_cmd_nm": list(telem.get("commanded_torques_nm") or []),
+        "torque_rsp_nm": list(telem.get("estimated_torques_nm") or []),
+        "tension_cmd_n": list(telem.get("commanded_tensions_n") or []),
+        "tension_rsp_n": list(telem.get("estimated_tensions_n") or []),
+        "bus_v": _actuator_field_vec(actuators, "bus_voltage_v"),
+        "axis_state": _actuator_field_vec(actuators, "axis_state"),
+        "axis_error": _actuator_field_vec(actuators, "error_flags"),
+        "hand_cmd_pose": _pose_state_to_legacy_pose(telem.get("commanded_pose")),
+        "hand_est_pose": _pose_state_to_legacy_pose(telem.get("estimated_pose")),
+        "hand_est_vel": _pose_state_to_legacy_velocity(telem.get("estimated_pose")),
+        "can_rx_hz": bus_stats.get("can_rx_hz"),
+        "can_tx_hz": bus_stats.get("can_tx_hz"),
+        "can_msg_hz": bus_stats.get("can_msg_hz"),
+        "can_util_est": bus_stats.get("can_util_est"),
+        "pos_fbk_hz": bus_stats.get("pos_fbk_hz"),
+        "pos_fbk_period0_min_s": bus_stats.get("pos_fbk_period0_min_s"),
+        "pos_fbk_period0_max_s": bus_stats.get("pos_fbk_period0_max_s"),
+        "control_state": telem.get("control_state"),
+        "profile_active": telem.get("profile_active"),
+    }
+    return normalized
+
 def _queue_put_latest(q: Queue, item):
     """Keep only the newest item in the queue."""
     try:
@@ -1057,6 +1157,7 @@ class RobotGUI(QWidget):
             telem = self.telem_queue.get()
             if not isinstance(telem, dict):
                 continue
+            telem = _normalize_telemetry(telem)
 
             self.last_telem_time = time.time()
             t = float(telem.get("t", time.time()))
