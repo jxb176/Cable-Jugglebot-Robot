@@ -53,3 +53,50 @@ The repository now includes a packaged planning library under `jugglebot.plannin
   - `python -m jugglebot.apps.controlui --host 192.168.1.42`
 - Environment variable alternatives:
   - `JUGGLEBOT_HOST`, `JUGGLEBOT_TCP_PORT`, `JUGGLEBOT_UDP_PORT`
+
+## Pattern Studio
+
+- Launch the unconstrained juggling pattern editor:
+  - `python -m jugglebot.apps.patternui`
+- Launch the standalone B-spline sandbox:
+  - `python -m jugglebot.apps.bsplineui`
+- Open an existing pattern YAML:
+  - `python -m jugglebot.apps.patternui --file path/to/pattern.yaml`
+- Checked-in sample pattern:
+  - `src/jugglebot/patterns/examples/three_ball_cascade.yaml`
+- Additional sample patterns:
+  - `src/jugglebot/patterns/examples/one_ball_one_hand.yaml`
+  - `src/jugglebot/patterns/examples/two_balls_one_hand.yaml`
+- Current scope:
+  - define throw and catch points per event
+  - author unconstrained hand trajectory keyframes in a `hands` YAML section with explicit waypoint velocities
+  - choose `cubic`, `quintic`, or `bspline` interpolation for authored hand segments
+  - for `bspline` hand segments, configure cubic or quintic spline degree, control-point count, tangent direction, and a separate scalar `path_speed`
+  - changing `path_speed` on a `bspline` segment changes traversal timing along the curve without changing the curve geometry
+  - enforce throw hand position/velocity to match the ball throw state with zero acceleration at the throw point
+  - enforce catch hand position with velocity set by `catch_velocity_scale * ball_velocity` and zero acceleration at the catch point
+  - edit throw/catch timing and positions directly
+  - adjust the selected event with live sliders and update the hand trajectory in real time
+  - preview ball flights, left/right hand trajectories, authored hand waypoints, and throw/catch anchors in `x / y`, `x / z`, `y / z`, and isometric views
+  - click authored hand waypoints in the `x / z` and `y / z` views to select them and drag them live
+  - drag authored waypoint velocity arrows in the `x / z` and `y / z` views with immediate trajectory feedback; for `bspline` waypoints the arrow steers tangent direction while `path_speed` remains a separate scalar control
+  - inspect the generated control polygon for the selected outgoing `bspline` segment in the preview
+  - highlight the selected waypoint and its connected hand spline segment in the preview
+  - inspect stacked position / velocity / acceleration plots for the selected hand
+  - switch between looped playback and single-run playback
+  - multi-select events in the throw list and delete them as a batch
+  - save/load YAML pattern projects
+- The editor is intentionally unconstrained for now:
+  - no robot kinematic limits
+  - no path optimization
+  - no cable/Stewart feasibility checks
+
+## B-Spline Sandbox
+
+- A lightweight 2D sandbox for B-spline geometry experiments, separate from the juggling pattern editor.
+- Supports:
+  - changing spline degree and control-point count
+  - dragging endpoints independently
+  - dragging start/end tangent vectors independently
+  - dragging interior control points and the end-adjacent control point
+  - panning and zooming the canvas while inspecting the sampled curve, control polygon, knot vector, and arc length

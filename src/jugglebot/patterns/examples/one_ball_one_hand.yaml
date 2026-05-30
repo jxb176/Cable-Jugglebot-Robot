@@ -1,0 +1,43 @@
+name: one_ball_one_hand_right
+mode: loop
+loop_period: 1.5
+gravity: 9.81
+events:
+- id: A1
+  ball: A
+  throw_hand: right
+  catch_hand: right
+  throw_time: 0.0
+  catch_time: 1.0
+  throw_pos:
+  - 0.1
+  - 0.0
+  - 0.0
+  catch_pos:
+  - -0.1
+  - 0.0
+  - 0.0
+hands:
+  right:
+  - id: R1
+    time: 0.5
+    pos:
+    - 0.0
+    - 0.0
+    - 0.3
+    velocity:
+    - -0.2
+    - 0.0
+    - 0.0
+    spline_to_next: cubic
+  - id: R2
+    time: 1.25
+    pos:
+    - 0.0
+    - 0.0
+    - -0.3
+    velocity:
+    - 0.4
+    - 0.0
+    - -1.2
+    spline_to_next: quintic

@@ -1,0 +1,59 @@
+name: two_balls_one_hand_right
+mode: loop
+loop_period: 3.6
+gravity: 9.81
+events:
+  - id: B1
+    ball: B
+    throw_hand: right
+    catch_hand: right
+    throw_time: 0.0
+    catch_time: 1.35
+    throw_pos: [0.34, 0.18, 0.99]
+    catch_pos: [0.18, 0.05, 0.75]
+  - id: A1
+    ball: A
+    throw_hand: right
+    catch_hand: right
+    throw_time: 0.9
+    catch_time: 2.25
+    throw_pos: [0.27, 0.14, 0.94]
+    catch_pos: [0.16, 0.03, 0.74]
+  - id: A2
+    ball: A
+    throw_hand: right
+    catch_hand: right
+    throw_time: 2.7
+    catch_time: 4.05
+    throw_pos: [0.27, 0.14, 0.94]
+    catch_pos: [0.16, 0.03, 0.74]
+  - id: B2
+    ball: B
+    throw_hand: right
+    catch_hand: right
+    throw_time: 1.8
+    catch_time: 3.15
+    throw_pos: [0.34, 0.18, 0.99]
+    catch_pos: [0.18, 0.05, 0.75]
+hands:
+  right:
+    - id: R1
+      time: 0.45
+      pos: [0.48, 0.26, 1.18]
+      velocity: [-0.07777777777777778, -0.04444444444444442, -0.0555555555555556]
+      spline_to_next: cubic
+    - id: R2
+      time: 1.55
+      pos: [0.12, 0.00, 0.58]
+      velocity: [0.3555555555555557, 0.2888888888888889, 0.5333333333333333]
+      spline_to_next: quintic
+    - id: R3
+      time: 2.45
+      pos: [0.44, 0.22, 1.10]
+      velocity: [0.24444444444444438, 0.24444444444444438, 0.4444444444444442]
+      spline_to_next: cubic
+    - id: R4
+      time: 3.35
+      pos: [0.22, 0.08, 0.62]
+      velocity: [-0.022222222222222213, -0.02222222222222223, -0.011111111111111122]
+      spline_to_next: quintic

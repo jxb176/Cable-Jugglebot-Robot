@@ -7,7 +7,6 @@ Runs the real-time control loop with ODrive hardware.
 
 import argparse
 import logging
-import os
 import sys
 import threading
 import time
@@ -16,16 +15,14 @@ from pathlib import Path
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import yaml
 from jugglebot.core.robot_server import (
-    RobotState,
     ControlBridge,
-    tcp_command_server,
-    axes_state_logger,
     ensure_can_interface_up,
 )
-from jugglebot.drivers.hardware_driver import HardwareDriver
-from jugglebot.drivers.simulation_driver import SimulationDriver
+from jugglebot.core.state import RuntimeMailbox
+from jugglebot.io.odrive_can_bus import ODriveCanBus
+from jugglebot.transport.axes_logger import axes_state_logger
+from jugglebot.transport.tcp_commands import tcp_command_server
 from jugglebot.config import load_config
 
 
@@ -56,7 +53,7 @@ def main():
     logger.info("Starting Cable Jugglebot Hardware Daemon")
 
     # Initialize robot state
-    state = RobotState()
+    state = RuntimeMailbox()
 
     # Setup CAN interface
     can_config = config.get("hardware", {}).get("can", {})
@@ -71,12 +68,12 @@ def main():
     odrive_config = config.get("hardware", {}).get("odrive", {})
     axis_ids = odrive_config.get("axis_ids", [0, 1, 2, 3, 4, 5])
 
-    # Create hardware driver
+    # Create hardware actuator bus
     mm_per_turn = odrive_config.get("mm_per_turn", [-62.832] * len(axis_ids))
     capstan_radius_m = float(config.get("geometry", {}).get("capstan_radius_m", 0.01))
     torque_direction = float(odrive_config.get("torque_direction", 1.0))
     pose_est_rate_hz = float(odrive_config.get("pose_est_rate_hz", 100.0))
-    driver = HardwareDriver(
+    driver = ODriveCanBus(
         canbus=can_interface,
         axis_ids=axis_ids,
         mm_per_turn=mm_per_turn,

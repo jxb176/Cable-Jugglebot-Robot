@@ -7,7 +7,6 @@ Runs the real-time control loop in simulation mode.
 
 import argparse
 import logging
-import os
 import sys
 import threading
 import time
@@ -17,12 +16,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from jugglebot.core.robot_server import (
-    RobotState,
     ControlBridge,
-    tcp_command_server,
-    axes_state_logger,
 )
-from jugglebot.drivers.simulation_driver import SimulationDriver
+from jugglebot.core.state import RuntimeMailbox
+from jugglebot.io.simulated_actuator_bus import SimulatedActuatorBus
+from jugglebot.transport.axes_logger import axes_state_logger
+from jugglebot.transport.tcp_commands import tcp_command_server
 from jugglebot.config import load_config
 
 
@@ -63,7 +62,7 @@ def main():
     logger.info("Starting Cable Jugglebot Simulation Daemon")
 
     # Initialize robot state
-    state = RobotState()
+    state = RuntimeMailbox()
 
     # Setup simulation driver
     odrive_config = config.get("hardware", {}).get("odrive", {})
@@ -71,8 +70,8 @@ def main():
     spool_cfg = config.get("controller", {}).get("spool_space", {})
     winch_cfg = config.get("winches", {})
 
-    # Create simulation driver
-    driver = SimulationDriver(
+    # Create simulation actuator bus
+    driver = SimulatedActuatorBus(
         axis_ids=axis_ids,
         enable_viewer=args.viewer,
         spool_kp=spool_cfg.get("kp"),

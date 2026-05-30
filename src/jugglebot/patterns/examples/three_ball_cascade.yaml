@@ -1,0 +1,175 @@
+name: three_ball_cascade
+mode: loop
+loop_period: 3.5
+gravity: 9.81
+events:
+- id: A1
+  ball: A
+  throw_hand: left
+  catch_hand: right
+  throw_time: 0.0
+  catch_time: 1.5
+  throw_pos:
+  - -0.32
+  - -0.08
+  - 1.0
+  catch_pos:
+  - 0.22
+  - -0.06
+  - 0.78
+  catch_velocity_scale: 0.35
+- id: B1
+  ball: B
+  throw_hand: right
+  catch_hand: left
+  throw_time: 0.5
+  catch_time: 2.0
+  throw_pos:
+  - 0.32
+  - 0.08
+  - 1.0
+  catch_pos:
+  - -0.22
+  - 0.06
+  - 0.78
+  catch_velocity_scale: 0.35
+- id: C1
+  ball: C
+  throw_hand: left
+  catch_hand: right
+  throw_time: 1.0
+  catch_time: 2.5
+  throw_pos:
+  - -0.32
+  - -0.08
+  - 1.0
+  catch_pos:
+  - 0.22
+  - -0.06
+  - 0.78
+  catch_velocity_scale: 0.35
+- id: A2
+  ball: A
+  throw_hand: right
+  catch_hand: left
+  throw_time: 1.75
+  catch_time: 3.25
+  throw_pos:
+  - 0.32
+  - 0.08
+  - 1.0
+  catch_pos:
+  - -0.22
+  - 0.06
+  - 0.78
+  catch_velocity_scale: 0.35
+- id: B2
+  ball: B
+  throw_hand: left
+  catch_hand: right
+  throw_time: 2.25
+  catch_time: 3.75
+  throw_pos:
+  - -0.32
+  - -0.08
+  - 1.0
+  catch_pos:
+  - 0.22
+  - -0.06
+  - 0.78
+  catch_velocity_scale: 0.35
+- id: C2
+  ball: C
+  throw_hand: right
+  catch_hand: left
+  throw_time: 2.75
+  catch_time: 4.25
+  throw_pos:
+  - 0.32
+  - 0.08
+  - 1.0
+  catch_pos:
+  - -0.22
+  - 0.06
+  - 0.78
+  catch_velocity_scale: 0.35
+hands:
+  left:
+  - id: L1
+    time: 0.35
+    pos:
+    - -0.42
+    - -0.18
+    - 1.18
+    velocity:
+    - 0.0
+    - 0.0
+    - 0.0
+    spline_to_next: cubic
+  - id: L2
+    time: 1.45
+    pos:
+    - -0.3
+    - 0.18
+    - 0.9
+    velocity:
+    - 0.1
+    - 0.14
+    - -0.22
+    spline_to_next: quintic
+  - id: L3
+    time: 2.55
+    pos:
+    - -0.42
+    - -0.2
+    - 1.16
+    velocity:
+    - 0.1
+    - 0.14
+    - -0.22
+    spline_to_next: cubic
+  - id: L4
+    time: 3.35
+    pos:
+    - -0.28
+    - 0.16
+    - 0.86
+    velocity:
+    - 0.0
+    - 0.0
+    - 0.0
+    spline_to_next: quintic
+  right:
+  - id: R1
+    time: 0.95
+    pos:
+    - 0.42
+    - 0.2
+    - 1.16
+    velocity:
+    - -0.1
+    - -0.14
+    - -0.22
+    spline_to_next: cubic
+  - id: R2
+    time: 2.1
+    pos:
+    - 0.3
+    - -0.18
+    - 0.88
+    velocity:
+    - -0.13333333333333333
+    - -0.18666666666666668
+    - -0.2933333333333333
+    spline_to_next: quintic
+  - id: R3
+    time: 3.0
+    pos:
+    - 0.42
+    - 0.18
+    - 1.14
+    velocity:
+    - -0.1
+    - -0.14
+    - -0.22
+    spline_to_next: cubic

@@ -43,3 +43,8 @@ plantraj = "jugglebot.apps.plantraj:main"
 playtraj = "jugglebot.apps.playtraj:main"
 reviewlog = "jugglebot.apps.reviewlog:main"
 controlui = "jugglebot.apps.controlui:main"
+patternui = "jugglebot.apps.patternui:main"
+bsplineui = "jugglebot.apps.bsplineui:main"
+
+[tool.setuptools.package-data]
+"jugglebot.patterns" = ["examples/*.yaml"]
