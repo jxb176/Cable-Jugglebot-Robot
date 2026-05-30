@@ -126,6 +126,7 @@ def _init_logging():
     logger.handlers.clear()
     logger.addHandler(fh)
     logger.addHandler(ch)
+    logger.propagate = False
     return logger, log_path
 
 logger, LOG_FILE_PATH = _init_logging()
@@ -615,6 +616,29 @@ class ControlBridge(threading.Thread):
                         bus_utilization_estimate=bus_utilization_estimate,
                     )
                 )
+                read_ms = 1000.0 * read_duration_s
+                observer_ms = 1000.0 * observer_duration_s
+                traj_ms = (
+                    float("nan")
+                    if self._last_control_step_timings["trajectory_duration_s"] is None
+                    else 1000.0 * float(self._last_control_step_timings["trajectory_duration_s"])
+                )
+                kin_ms = (
+                    float("nan")
+                    if self._last_control_step_timings["kinematics_duration_s"] is None
+                    else 1000.0 * float(self._last_control_step_timings["kinematics_duration_s"])
+                )
+                solver_ms = (
+                    float("nan")
+                    if self._last_control_step_timings["tension_solver_duration_s"] is None
+                    else 1000.0 * float(self._last_control_step_timings["tension_solver_duration_s"])
+                )
+                write_ms = 1000.0 * self._loop_command_write_duration_s
+                loop_ms = 1000.0 * total_loop_duration_s
+                deadline_margin_ms = 1000.0 * deadline_margin_s
+                feedback_age_ms = (
+                    float("nan") if feedback_age_s is None else 1000.0 * float(feedback_age_s)
+                )
                 if self._diag_writer is not None and (now - self._diag_last_log_perf) >= (1.0 / self.diag_log_hz):
                     self._write_diag_row(now)
                     self._diag_last_log_perf = now
@@ -623,14 +647,20 @@ class ControlBridge(threading.Thread):
                         logger.info(
                             f"[CTRL] streaming {len(self.axis_ids)} axes, state={st}, "
                             f"sim_time={self._sim_time_s:.3f}s, rt_factor={self._sim_rt_factor:.3f}x, "
-                            f"deadline_margin={deadline_margin_s * 1000.0:.2f} ms, "
-                            f"missed={self._missed_deadline_count}"
+                            f"deadline_margin={deadline_margin_ms:.2f} ms, "
+                            f"missed={self._missed_deadline_count}, "
+                            f"read={read_ms:.2f} ms observer={observer_ms:.2f} ms "
+                            f"traj={traj_ms:.2f} ms kin={kin_ms:.2f} ms solver={solver_ms:.2f} ms "
+                            f"write={write_ms:.2f} ms loop={loop_ms:.2f} ms fb_age={feedback_age_ms:.2f} ms"
                         )
                     else:
                         logger.info(
                             f"[CTRL] streaming {len(self.axis_ids)} axes, state={st}, "
-                            f"deadline_margin={deadline_margin_s * 1000.0:.2f} ms, "
-                            f"missed={self._missed_deadline_count}"
+                            f"deadline_margin={deadline_margin_ms:.2f} ms, "
+                            f"missed={self._missed_deadline_count}, "
+                            f"read={read_ms:.2f} ms observer={observer_ms:.2f} ms "
+                            f"traj={traj_ms:.2f} ms kin={kin_ms:.2f} ms solver={solver_ms:.2f} ms "
+                            f"write={write_ms:.2f} ms loop={loop_ms:.2f} ms fb_age={feedback_age_ms:.2f} ms"
                         )
                     last_log = now
 
