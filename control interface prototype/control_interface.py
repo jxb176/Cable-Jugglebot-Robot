@@ -29,6 +29,7 @@ except Exception:
 ROBOT_HOST = "jugglepi.local"  # <-- set to your Raspberry Pi IP or hostname
 TCP_CMD_PORT = 5555
 UDP_TELEM_PORT = 5556
+UDP_RECV_BUFFER_BYTES = 65535
 
 def _queue_put_latest(q: Queue, item):
     """Keep only the newest item in the queue."""
@@ -204,7 +205,7 @@ def telemetry_listener(udp_port: int, telem_queue: Queue, status_cb=None):
         status_cb(f"Telemetry: listening UDP :{udp_port}")
     while True:
         try:
-            data, _ = sock.recvfrom(4096)
+            data, _ = sock.recvfrom(UDP_RECV_BUFFER_BYTES)
             # New format: {"t": <unix_time>, "pos": [6], "vel": [6]}
             # Legacy: {"t": <unix_time>, "val": <float>}
             telem = json.loads(data.decode("utf-8"))

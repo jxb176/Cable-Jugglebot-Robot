@@ -21,7 +21,7 @@ def udp_telemetry_sender(state, udp_sock, stop_event):
                 controller_addr = (controller_ip, UDP_TELEM_PORT)
                 snapshot = build_robot_state_snapshot(state, timestamp_s=time.time())
                 msg = snapshot.to_dict()
-                udp_sock.sendto(json.dumps(msg).encode("utf-8"), controller_addr)
+                udp_sock.sendto(json.dumps(msg, separators=(",", ":")).encode("utf-8"), controller_addr)
         except Exception as e:
             logger.error(f"[UDP] Error sending telemetry: {e}")
         time.sleep(1.0 / TELEMETRY_RATE_HZ)
