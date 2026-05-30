@@ -6,7 +6,7 @@ import logging
 import threading
 
 from jugglebot.core.cable_ik import q_norm
-from jugglebot.core.types import TrajectoryUpdate
+from jugglebot.core.types import TimingStats, TrajectoryUpdate
 
 
 logger = logging.getLogger("robot")
@@ -66,6 +66,7 @@ class RuntimeMailbox:
         self.trajectory_update_version = 0
         self.snapshot_sequence = 0
         self.control_time_s = None
+        self.timing_stats: TimingStats | None = None
 
     def set_hand_pose(self, t_mm, q, v_mps=None, a_mps2=None):
         with self.lock:
@@ -155,6 +156,19 @@ class RuntimeMailbox:
     def get_control_time_s(self):
         with self.lock:
             return self.control_time_s
+
+    def set_timing_stats(self, timing_stats: TimingStats | None):
+        with self.lock:
+            if timing_stats is None:
+                self.timing_stats = None
+            else:
+                self.timing_stats = TimingStats(**timing_stats.to_dict())
+
+    def get_timing_stats(self):
+        with self.lock:
+            if self.timing_stats is None:
+                return None
+            return TimingStats(**self.timing_stats.to_dict())
 
     def next_snapshot_sequence(self):
         with self.lock:

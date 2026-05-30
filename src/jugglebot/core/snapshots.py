@@ -92,6 +92,8 @@ def build_robot_state_snapshot(
 ):
     timestamp_s = time.time() if timestamp_s is None else float(timestamp_s)
     sequence_id = state.next_snapshot_sequence() if sequence_id is None else int(sequence_id)
+    if timing is None and hasattr(state, "get_timing_stats"):
+        timing = state.get_timing_stats()
     axis_mm_per_turn = list(mm_per_turn or MM_PER_TURN)
 
     with state.lock:

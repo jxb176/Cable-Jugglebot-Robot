@@ -92,6 +92,8 @@ class ControllerStepResult:
     commands: tuple[ActuatorCommand, ...]
     state: TaskspaceControllerState
     debug: ControllerDebugSnapshot
+    kinematics_duration_s: float | None = None
+    tension_solver_duration_s: float | None = None
 
 
 def _safe_measured_tensions(actuator_states: Sequence[ActuatorState], axis_count: int):
@@ -124,6 +126,7 @@ def compute_taskspace_spool_commands(
     if now_perf is None:
         now_perf = time.perf_counter()
 
+    t_kin_start = time.perf_counter()
     roll_cmd, pitch_cmd, _ = quat_to_rpy_rad(pose_q)
     q_ref = np.array(
         [pose_t_mm[0] / 1000.0, pose_t_mm[1] / 1000.0, pose_t_mm[2] / 1000.0, roll_cmd, pitch_cmd],
@@ -167,6 +170,8 @@ def compute_taskspace_spool_commands(
 
     j_cmd = cable_lengths_jacobian_pose5_fd(q_ref, geometry=config.geometry)
     j_null = j_outer_arr if j_outer_arr is not None and np.shape(j_outer_arr) == (len(config.axis_ids), 5) else j_cmd
+    t_solver_start = time.perf_counter()
+    kinematics_duration_s = (t_solver_start - t_kin_start)
 
     tau_plat_ff = np.asarray(qdd_ff, dtype=float)
     tau_plat_ff[2] += float(config.gravity_ff_z_n)
@@ -226,6 +231,8 @@ def compute_taskspace_spool_commands(
             null_cmd_m = n_vec * float(next_state.null_eta_m)
         except Exception:
             pass
+    t_pack_start = time.perf_counter()
+    tension_solver_duration_s = (t_pack_start - t_solver_start)
 
     cmd_m = pose_ref_m + pose_corr_m + null_cmd_m
     cmd_mm = tuple(1000.0 * float(v) for v in cmd_m)
@@ -266,7 +273,14 @@ def compute_taskspace_spool_commands(
         sigma_meas_n=float(sigma_meas),
         eta_null_m=float(next_state.null_eta_m),
     )
-    return ControllerStepResult(commands=commands, state=next_state, debug=debug)
+    kinematics_duration_s += max(0.0, time.perf_counter() - t_pack_start)
+    return ControllerStepResult(
+        commands=commands,
+        state=next_state,
+        debug=debug,
+        kinematics_duration_s=float(kinematics_duration_s),
+        tension_solver_duration_s=float(tension_solver_duration_s),
+    )
 
 
 def compute_cablespace_fallback_commands(
@@ -280,6 +294,7 @@ def compute_cablespace_fallback_commands(
     Fallback controller for drivers without platform-state feedback:
     cable-space PD + bias tension.
     """
+    t_kin_start = time.perf_counter()
     cable_mm = pose_to_cable_lengths_mm(config.geometry, pose_t_mm, pose_q)
     cmd_mm = [cable_mm[i] - config.home_cable_mm[i] for i in range(len(config.axis_ids))]
     torque_cmd = [0.0] * len(config.axis_ids)
@@ -335,4 +350,6 @@ def compute_cablespace_fallback_commands(
         commands=tuple(commands),
         state=TaskspaceControllerState(),
         debug=debug,
+        kinematics_duration_s=float(time.perf_counter() - t_kin_start),
+        tension_solver_duration_s=None,
     )

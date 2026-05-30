@@ -25,9 +25,10 @@ from jugglebot.io.actuator_bus import ActuatorBus
 from jugglebot.core.platform_estimator import CablePlatformEstimator
 from jugglebot.core.pose_utils import quat_from_rpy_deg
 from jugglebot.core.state import RuntimeMailbox
-from jugglebot.core.types import ActuatorCommand, ActuatorControlMode, ActuatorState
+from jugglebot.core.types import ActuatorCommand, ActuatorControlMode, ActuatorState, TimingStats
 from jugglebot.core.tension_control import TensionAllocatorConfig, platform_wrench_from_tensions
 from jugglebot.core.units import MM_PER_TURN, mm_to_turns
+from jugglebot.rt.clock import WallClock
 
 # -------- ODrive CAN configuration --------
 ODRIVE_INTERFACE = "can0"
@@ -216,6 +217,18 @@ class ControlBridge(threading.Thread):
         self._sim_rt_factor = float("nan")
         self._sim_time_prev = None
         self._sim_wall_prev = None
+        self._clock = WallClock()
+        robot_cfg = self.config.get("robot") or {}
+        self._control_rate_hz = float(robot_cfg.get("control_rate_hz", ODRIVE_COMMAND_RATE_HZ))
+        self._loop_period_s = 1.0 / max(1.0, self._control_rate_hz)
+        self._missed_deadline_count = 0
+        self._loop_command_write_duration_s = 0.0
+        self._last_loop_start_perf = None
+        self._last_control_step_timings = {
+            "trajectory_duration_s": None,
+            "kinematics_duration_s": None,
+            "tension_solver_duration_s": None,
+        }
         controller_cfg = (self.config.get("controller") or {}).get("spool_space") or {}
         mm_per_turn_default = getattr(self.driver, "mm_per_turn", MM_PER_TURN)
         self._mm_per_turn = _expand_axis_values(mm_per_turn_default, MM_PER_TURN[0], axis_count=len(self.axis_ids))
@@ -412,10 +425,13 @@ class ControlBridge(threading.Thread):
     def _write_command_batch(self, commands):
         if not commands:
             return
+        start_perf = self._clock.now_monotonic()
         try:
             self.driver.write_commands(commands)
         except Exception as exc:
             logger.error(f"[CTRL] Failed to write actuator command batch: {exc}")
+        finally:
+            self._loop_command_write_duration_s += max(0.0, self._clock.now_monotonic() - start_perf)
 
     def _apply_controller_debug(self, debug):
         self._last_spool_cmd_mm = [float(x) for x in debug.spool_cmd_mm]
@@ -469,9 +485,25 @@ class ControlBridge(threading.Thread):
             self._open_diag_log()
 
             # main loop (~500 Hz)
-            last_log = time.perf_counter()
+            last_log = self._clock.now_monotonic()
             while not self._stop.is_set():
+                loop_start_perf = self._clock.now_monotonic()
+                if self._last_loop_start_perf is None:
+                    loop_period_s = None
+                else:
+                    loop_period_s = max(0.0, loop_start_perf - self._last_loop_start_perf)
+                self._last_loop_start_perf = loop_start_perf
+                loop_deadline_perf = loop_start_perf + self._loop_period_s
+                self._loop_command_write_duration_s = 0.0
+                self._last_control_step_timings = {
+                    "trajectory_duration_s": None,
+                    "kinematics_duration_s": None,
+                    "tension_solver_duration_s": None,
+                }
+
+                read_start_perf = self._clock.now_monotonic()
                 actuator_states = self._read_actuator_states()
+                read_duration_s = max(0.0, self._clock.now_monotonic() - read_start_perf)
                 st = self.state.get_state()
                 sv = self.state.get_state_version()
 
@@ -497,7 +529,9 @@ class ControlBridge(threading.Thread):
                     self._apply_spool_gain_multipliers()
                     self._applied_spool_gain_version = gv
 
+                observer_start_perf = self._clock.now_monotonic()
                 q_cur, qd_cur, j_cur = self._set_platform_estimate_from_feedback(actuator_states)
+                observer_duration_s = max(0.0, self._clock.now_monotonic() - observer_start_perf)
 
                 # Stream setpoints if enabled
                 if st == "enable":
@@ -546,10 +580,41 @@ class ControlBridge(threading.Thread):
                     self._last_torque_cmd_nm = [float(x) for x in torque_cmd]
 
                 # light heartbeat log
-                now = time.perf_counter()
+                now = self._clock.now_monotonic()
                 self._set_runtime_feedback_telemetry(actuator_states)
                 self._update_comm_stats_from_bus()
                 self._update_sim_timing(now)
+                feedback_ages = [
+                    float(axis_state.feedback_age_s)
+                    for axis_state in actuator_states
+                    if axis_state.feedback_age_s is not None
+                ]
+                feedback_age_s = max(feedback_ages) if feedback_ages else None
+                bus_utilization_estimate = None
+                try:
+                    bus_utilization_estimate = self.state.get_comm_stats().get("can_util_est")
+                except Exception:
+                    bus_utilization_estimate = None
+                total_loop_duration_s = max(0.0, self._clock.now_monotonic() - loop_start_perf)
+                deadline_margin_s = loop_deadline_perf - self._clock.now_monotonic()
+                if deadline_margin_s < 0.0:
+                    self._missed_deadline_count += 1
+                self.state.set_timing_stats(
+                    TimingStats(
+                        loop_period_s=loop_period_s,
+                        read_duration_s=read_duration_s,
+                        observer_duration_s=observer_duration_s,
+                        trajectory_duration_s=self._last_control_step_timings["trajectory_duration_s"],
+                        kinematics_duration_s=self._last_control_step_timings["kinematics_duration_s"],
+                        tension_solver_duration_s=self._last_control_step_timings["tension_solver_duration_s"],
+                        command_write_duration_s=self._loop_command_write_duration_s,
+                        total_loop_duration_s=total_loop_duration_s,
+                        deadline_margin_s=deadline_margin_s,
+                        missed_deadline_count=self._missed_deadline_count,
+                        feedback_age_s=feedback_age_s,
+                        bus_utilization_estimate=bus_utilization_estimate,
+                    )
+                )
                 if self._diag_writer is not None and (now - self._diag_last_log_perf) >= (1.0 / self.diag_log_hz):
                     self._write_diag_row(now)
                     self._diag_last_log_perf = now
@@ -557,13 +622,19 @@ class ControlBridge(threading.Thread):
                     if np.isfinite(self._sim_time_s) and np.isfinite(self._sim_rt_factor):
                         logger.info(
                             f"[CTRL] streaming {len(self.axis_ids)} axes, state={st}, "
-                            f"sim_time={self._sim_time_s:.3f}s, rt_factor={self._sim_rt_factor:.3f}x"
+                            f"sim_time={self._sim_time_s:.3f}s, rt_factor={self._sim_rt_factor:.3f}x, "
+                            f"deadline_margin={deadline_margin_s * 1000.0:.2f} ms, "
+                            f"missed={self._missed_deadline_count}"
                         )
                     else:
-                        logger.info(f"[CTRL] streaming {len(self.axis_ids)} axes, state={st}")
+                        logger.info(
+                            f"[CTRL] streaming {len(self.axis_ids)} axes, state={st}, "
+                            f"deadline_margin={deadline_margin_s * 1000.0:.2f} ms, "
+                            f"missed={self._missed_deadline_count}"
+                        )
                     last_log = now
 
-                time.sleep(0.002)  # ~500 Hz
+                self._clock.sleep_until(loop_deadline_perf)
 
         except Exception as e:
             logger.error(f"[CTRL] Bridge error: {e}")
@@ -584,7 +655,9 @@ class ControlBridge(threading.Thread):
         actuator_states: tuple[ActuatorState, ...] = (),
     ):
         """Generate spool references from task-space commands and return position-mode actuator commands."""
+        traj_start_perf = self._clock.now_monotonic()
         t_mm_cmd, q_cmd, v_cmd_mps, a_cmd_mps2 = self.state.get_hand_motion()
+        trajectory_duration_s = max(0.0, self._clock.now_monotonic() - traj_start_perf)
         result = compute_taskspace_spool_commands(
             pose_t_mm=t_mm_cmd,
             pose_q=q_cmd,
@@ -600,6 +673,11 @@ class ControlBridge(threading.Thread):
         )
         self._taskspace_controller_state = result.state
         self._apply_controller_debug(result.debug)
+        self._last_control_step_timings = {
+            "trajectory_duration_s": trajectory_duration_s,
+            "kinematics_duration_s": result.kinematics_duration_s,
+            "tension_solver_duration_s": result.tension_solver_duration_s,
+        }
         return list(result.commands)
 
     def _run_cablespace_fallback_control(self, actuator_states: tuple[ActuatorState, ...] = ()):
@@ -607,7 +685,9 @@ class ControlBridge(threading.Thread):
         Fallback controller for drivers without platform-state feedback:
         cable-space PD + bias tension.
         """
+        traj_start_perf = self._clock.now_monotonic()
         t_mm, q = self.state.get_hand_pose()
+        trajectory_duration_s = max(0.0, self._clock.now_monotonic() - traj_start_perf)
         result = compute_cablespace_fallback_commands(
             pose_t_mm=t_mm,
             pose_q=q,
@@ -616,6 +696,11 @@ class ControlBridge(threading.Thread):
         )
         self._apply_controller_debug(result.debug)
         self._taskspace_controller_state = TaskspaceControllerState(null_sigma_ref_n=float(self._null_sigma_ref_base))
+        self._last_control_step_timings = {
+            "trajectory_duration_s": trajectory_duration_s,
+            "kinematics_duration_s": result.kinematics_duration_s,
+            "tension_solver_duration_s": result.tension_solver_duration_s,
+        }
         return list(result.commands)
 
     def _publish_platform_estimate(self, q_cur, qd_cur):
