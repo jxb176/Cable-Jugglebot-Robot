@@ -982,10 +982,10 @@ class RobotGUI(QWidget):
 
             _queue_put_latest(
                 self.cmd_queue,
-                {"type": "pose_profile_run", "profile": rows, "rate_hz": float(cmd_hz)},
+                {"type": "pose_profile_run", "profile": rows},
             )
             self.status_label.setText(
-                f"Sent+Started JugglePath {name}: {len(rows)} pts @ {float(cmd_hz):.1f} Hz"
+                f"Sent+Started JugglePath {name}: {len(rows)} pts"
             )
         except Exception as e:
             self.status_label.setText(f"JugglePath send failed: {e}")
@@ -1018,15 +1018,14 @@ class RobotGUI(QWidget):
             self.status_label.setText(f"Profile send failed: {e}")
 
     def on_start_profile(self):
-        rate = float(self.profile_rate.value())
         is_pose = (self.profile_type_combo.currentIndex() == 1)
 
         if is_pose:
-            cmd = {"type": "pose_profile_start", "rate_hz": rate}
-            self.status_label.setText(f"Pose profile start requested at {rate:.1f} Hz")
+            cmd = {"type": "pose_profile_start"}
+            self.status_label.setText("Pose profile start requested")
         else:
-            cmd = {"type": "profile_start", "rate_hz": rate}
-            self.status_label.setText(f"Axis profile start requested at {rate:.1f} Hz")
+            cmd = {"type": "profile_start"}
+            self.status_label.setText("Axis profile start requested")
 
         _queue_put_latest(self.cmd_queue, cmd)
 

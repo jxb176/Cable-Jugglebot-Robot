@@ -7,11 +7,23 @@ import logging
 import socket
 
 from jugglebot.core.pose_utils import quat_from_rpy_deg
+from jugglebot.core.types import TrajectoryUpdateMode
 from jugglebot.core.units import coerce_vec6_to_mm
 from jugglebot.transport.config import TCP_CMD_PORT, UDP_TELEM_PORT
 
 
 logger = logging.getLogger("robot")
+
+
+def _parse_update_mode(raw_value):
+    if raw_value is None:
+        return TrajectoryUpdateMode.REPLACE
+    return TrajectoryUpdateMode(str(raw_value).lower())
+
+
+def _parse_preserve_continuity(msg):
+    raw = msg.get("preserve_continuity", True)
+    return bool(raw)
 
 
 def tcp_command_server(state):
@@ -67,20 +79,35 @@ def tcp_command_server(state):
                             z = float(msg.get("z_mm", 0.0))
                             roll = float(msg.get("roll_deg", 0.0))
                             pitch = float(msg.get("pitch_deg", 0.0))
+                            update_mode = _parse_update_mode(msg.get("update_mode"))
+                            effective_time_s = msg.get("effective_time_s")
+                            preserve_continuity = _parse_preserve_continuity(msg)
 
                             q = quat_from_rpy_deg(roll, pitch, 0.0)
-                            state.set_hand_pose((x, y, z), q)
+                            state.submit_pose_command(
+                                (x, y, z),
+                                q,
+                                mode=update_mode,
+                                effective_time_s=None if effective_time_s is None else float(effective_time_s),
+                                preserve_continuity=preserve_continuity,
+                            )
                         elif mtype == "pose_profile_upload":
                             profile = msg.get("profile", [])
                             state.set_pose_profile(profile)
                         elif mtype == "pose_profile_start":
-                            rate_hz = float(msg.get("rate_hz", 100.0))
-                            state.start_pose_profile(rate_hz)
+                            state.start_pose_profile(
+                                mode=_parse_update_mode(msg.get("update_mode")),
+                                effective_time_s=None if msg.get("effective_time_s") is None else float(msg.get("effective_time_s")),
+                                preserve_continuity=_parse_preserve_continuity(msg),
+                            )
                         elif mtype == "pose_profile_run":
                             profile = msg.get("profile", [])
-                            rate_hz = float(msg.get("rate_hz", 100.0))
                             state.set_pose_profile(profile)
-                            state.start_pose_profile(rate_hz)
+                            state.start_pose_profile(
+                                mode=_parse_update_mode(msg.get("update_mode")),
+                                effective_time_s=None if msg.get("effective_time_s") is None else float(msg.get("effective_time_s")),
+                                preserve_continuity=_parse_preserve_continuity(msg),
+                            )
                         elif mtype == "profile_stop":
                             state.stop_profile()
                         else:

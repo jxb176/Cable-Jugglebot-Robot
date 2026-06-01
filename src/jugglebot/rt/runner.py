@@ -31,6 +31,7 @@ from jugglebot.core.units import mm_to_turns
 from jugglebot.rt.clock import WallClock
 from jugglebot.rt.config import RuntimeConfig, parse_runtime_config
 from jugglebot.rt.state_machine import RuntimeMode, RuntimeStateMachine, RuntimeTransitionAction
+from jugglebot.rt.trajectory_manager import TrajectoryManager
 from jugglebot.rt.watchdog import RuntimeWatchdog, WatchdogSample
 
 OUTER_CORR_KP = np.diag([1.0, 1.0, 1.0, 0.35, 0.35])
@@ -289,6 +290,7 @@ class ControlBridge(threading.Thread):
             update_rate_hz=float(self.runtime_config.estimator.rate_hz),
         )
         self._state_machine = RuntimeStateMachine.from_mailbox(self.state, self.axis_ids)
+        self._trajectory_manager = TrajectoryManager()
         self._watchdog = RuntimeWatchdog(
             status_report_period_s=float(self.runtime_config.rt.status_report_period_s),
             deadline_warning_margin_s=1e-3 * float(self.runtime_config.rt.deadline_warning_margin_ms),
@@ -445,6 +447,17 @@ class ControlBridge(threading.Thread):
                 sm_result = self._state_machine.step(self.state)
                 st = sm_result.mode.value
                 self._execute_state_machine_actions(sm_result)
+                self._update_sim_timing(loop_start_perf)
+                control_now_s = self._sim_time_s if np.isfinite(self._sim_time_s) else loop_start_perf
+                self._trajectory_manager.consume_mailbox_updates(self.state, float(control_now_s))
+                trajectory_sample, trajectory_status = self._trajectory_manager.sample(float(control_now_s))
+                self.state.set_commanded_motion_sample(
+                    trajectory_sample.pose_t_mm,
+                    trajectory_sample.pose_q,
+                    v_mps=trajectory_sample.linear_velocity_mps,
+                    a_mps2=trajectory_sample.linear_acceleration_mps2,
+                )
+                self.state.set_profile_active(trajectory_status.profile_active)
 
                 observer_start_perf = self._clock.now_monotonic()
                 q_cur, qd_cur, j_cur = self._set_platform_estimate_from_feedback(actuator_states)
@@ -455,6 +468,7 @@ class ControlBridge(threading.Thread):
                     try:
                         if self._supports_position_command_with_ff():
                             commands = self._run_taskspace_spool_control(
+                                trajectory_sample=trajectory_sample,
                                 q_cur=q_cur,
                                 qd_cur=qd_cur,
                                 j_outer=j_cur,
@@ -500,7 +514,6 @@ class ControlBridge(threading.Thread):
                 now = self._clock.now_monotonic()
                 self._set_runtime_feedback_telemetry(actuator_states)
                 self._update_comm_stats_from_bus()
-                self._update_sim_timing(now)
                 feedback_ages = [
                     float(axis_state.feedback_age_s)
                     for axis_state in actuator_states
@@ -615,6 +628,7 @@ class ControlBridge(threading.Thread):
 
     def _run_taskspace_spool_control(
         self,
+        trajectory_sample,
         q_cur=None,
         qd_cur=None,
         j_outer=None,
@@ -622,7 +636,10 @@ class ControlBridge(threading.Thread):
     ):
         """Generate spool references from task-space commands and return position-mode actuator commands."""
         traj_start_perf = self._clock.now_monotonic()
-        t_mm_cmd, q_cmd, v_cmd_mps, a_cmd_mps2 = self.state.get_hand_motion()
+        t_mm_cmd = trajectory_sample.pose_t_mm
+        q_cmd = trajectory_sample.pose_q
+        v_cmd_mps = trajectory_sample.linear_velocity_mps
+        a_cmd_mps2 = trajectory_sample.linear_acceleration_mps2
         trajectory_duration_s = max(0.0, self._clock.now_monotonic() - traj_start_perf)
         result = compute_taskspace_spool_commands(
             pose_t_mm=t_mm_cmd,

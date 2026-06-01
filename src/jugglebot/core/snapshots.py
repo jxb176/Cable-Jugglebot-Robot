@@ -100,7 +100,7 @@ def build_robot_state_snapshot(
 
     with state.lock:
         control_state = str(state.state)
-        profile_active = state.player_thread is not None
+        profile_active = bool(getattr(state, "profile_active", False))
         axes_pos = list(state.axes_pos_estimate)
         axes_vel = list(state.axes_vel_estimate)
         axes_bus_voltage = list(state.axes_bus_voltage)

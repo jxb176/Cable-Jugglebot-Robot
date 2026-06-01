@@ -10,6 +10,7 @@ from jugglebot.core.types import (
     RuntimeHealthLevel,
     TimingStats,
     TrajectoryUpdate,
+    TrajectoryUpdateMode,
     WatchdogStatus,
 )
 
@@ -37,6 +38,7 @@ class RuntimeMailbox:
         self.home_pos = [0.0] * 6
         self.home_version = 0
         self.player_thread = None
+        self.profile_active = False
         self.axes_pos_estimate = [None] * 6
         self.axes_vel_estimate = [None] * 6
         self.axes_bus_voltage = [None] * 6
@@ -85,17 +87,24 @@ class RuntimeMailbox:
 
     def set_hand_pose(self, t_mm, q, v_mps=None, a_mps2=None):
         with self.lock:
-            self.hand_t_mm = (float(t_mm[0]), float(t_mm[1]), float(t_mm[2]))
-            self.hand_q = q_norm((float(q[0]), float(q[1]), float(q[2]), float(q[3])))
-            if v_mps is None:
-                self.hand_v_mps = (0.0, 0.0, 0.0)
-            else:
-                self.hand_v_mps = (float(v_mps[0]), float(v_mps[1]), float(v_mps[2]))
-            if a_mps2 is None:
-                self.hand_a_mps2 = (0.0, 0.0, 0.0)
-            else:
-                self.hand_a_mps2 = (float(a_mps2[0]), float(a_mps2[1]), float(a_mps2[2]))
+            self._set_hand_motion_locked(t_mm, q, v_mps=v_mps, a_mps2=a_mps2)
             self.hand_version += 1
+
+    def set_commanded_motion_sample(self, t_mm, q, v_mps=None, a_mps2=None):
+        with self.lock:
+            self._set_hand_motion_locked(t_mm, q, v_mps=v_mps, a_mps2=a_mps2)
+
+    def _set_hand_motion_locked(self, t_mm, q, v_mps=None, a_mps2=None):
+        self.hand_t_mm = (float(t_mm[0]), float(t_mm[1]), float(t_mm[2]))
+        self.hand_q = q_norm((float(q[0]), float(q[1]), float(q[2]), float(q[3])))
+        if v_mps is None:
+            self.hand_v_mps = (0.0, 0.0, 0.0)
+        else:
+            self.hand_v_mps = (float(v_mps[0]), float(v_mps[1]), float(v_mps[2]))
+        if a_mps2 is None:
+            self.hand_a_mps2 = (0.0, 0.0, 0.0)
+        else:
+            self.hand_a_mps2 = (float(a_mps2[0]), float(a_mps2[1]), float(a_mps2[2]))
 
     def get_hand_pose(self):
         with self.lock:
@@ -398,10 +407,23 @@ class RuntimeMailbox:
         with self.lock:
             player = self.player_thread
             self.player_thread = None
+            hold_pose = (
+                tuple(self.hand_t_mm),
+                tuple(self.hand_q),
+                tuple(self.hand_v_mps),
+                tuple(self.hand_a_mps2),
+            )
+            self.profile_active = False
         if player and player.is_alive():
             player.stop()
             player.join(timeout=1.0)
             logger.info("Profile stopped")
+        self.submit_pose_command(
+            hold_pose[0],
+            hold_pose[1],
+            v_mps=hold_pose[2],
+            a_mps2=hold_pose[3],
+        )
 
     def set_pose_profile(self, profile_pose: list):
         norm = []
@@ -433,6 +455,14 @@ class RuntimeMailbox:
         with self.lock:
             return list(self.pose_profile)
 
+    def set_profile_active(self, active: bool):
+        with self.lock:
+            self.profile_active = bool(active)
+
+    def get_profile_active(self):
+        with self.lock:
+            return bool(self.profile_active)
+
     def submit_trajectory_update(self, update: TrajectoryUpdate):
         if not isinstance(update, TrajectoryUpdate):
             raise TypeError("update must be a TrajectoryUpdate")
@@ -458,18 +488,106 @@ class RuntimeMailbox:
         with self.lock:
             return int(self.trajectory_update_version)
 
-    def start_pose_profile(self, rate_hz: float):
-        from jugglebot.core.profile_players import PoseProfilePlayer
+    def _next_trajectory_sequence_id(self) -> int:
+        return int(self.get_trajectory_update_version()) + 1
 
-        self.stop_profile()
+    def submit_pose_command(
+        self,
+        t_mm,
+        q,
+        v_mps=None,
+        a_mps2=None,
+        *,
+        mode: TrajectoryUpdateMode = TrajectoryUpdateMode.REPLACE,
+        effective_time_s: float | None = None,
+        preserve_continuity: bool = True,
+    ):
+        from jugglebot.core.types import PoseCommand, TrajectoryCommand, TrajectoryUpdate, TrajectoryUpdateMode, TrajectoryWaypoint
+        from jugglebot.core.pose_utils import quat_to_rpy_rad
+
+        roll_rad, pitch_rad, yaw_rad = quat_to_rpy_rad(q)
+        sequence_id = self._next_trajectory_sequence_id()
+        update = TrajectoryUpdate(
+            sequence_id=sequence_id,
+            mode=mode,
+            trajectory=TrajectoryCommand(
+                sequence_id=sequence_id,
+                waypoints=(
+                    TrajectoryWaypoint(
+                        time_from_start_s=0.0,
+                        pose=PoseCommand(
+                            x_m=float(t_mm[0]) / 1000.0,
+                            y_m=float(t_mm[1]) / 1000.0,
+                            z_m=float(t_mm[2]) / 1000.0,
+                            roll_rad=float(roll_rad),
+                            pitch_rad=float(pitch_rad),
+                            yaw_rad=float(yaw_rad),
+                            linear_velocity_mps=(
+                                0.0 if v_mps is None else float(v_mps[0]),
+                                0.0 if v_mps is None else float(v_mps[1]),
+                                0.0 if v_mps is None else float(v_mps[2]),
+                            ),
+                            linear_acceleration_mps2=(
+                                0.0 if a_mps2 is None else float(a_mps2[0]),
+                                0.0 if a_mps2 is None else float(a_mps2[1]),
+                                0.0 if a_mps2 is None else float(a_mps2[2]),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            effective_time_s=effective_time_s,
+            preserve_continuity=bool(preserve_continuity),
+        )
+        self.submit_trajectory_update(update)
+
+    def start_pose_profile(
+        self,
+        *,
+        mode: TrajectoryUpdateMode = TrajectoryUpdateMode.REPLACE,
+        effective_time_s: float | None = None,
+        preserve_continuity: bool = True,
+    ):
+        from jugglebot.core.types import PoseCommand, TrajectoryCommand, TrajectoryUpdate, TrajectoryUpdateMode, TrajectoryWaypoint
+
         prof = self.get_pose_profile()
         if not prof:
             raise RuntimeError("no pose profile uploaded")
-        player = PoseProfilePlayer(self, prof, rate_hz)
         with self.lock:
-            self.player_thread = player
-        logger.info(f"Pose profile start at {rate_hz:.1f} Hz")
-        player.start()
+            self.player_thread = None
+            self.profile_active = True
+        logger.info("Pose profile start requested")
+        t0 = float(prof[0][0])
+        waypoints = []
+        for t, pose6, v3, a3 in prof:
+            waypoints.append(
+                TrajectoryWaypoint(
+                    time_from_start_s=float(t) - t0,
+                    pose=PoseCommand(
+                        x_m=float(pose6[0]) / 1000.0,
+                        y_m=float(pose6[1]) / 1000.0,
+                        z_m=float(pose6[2]) / 1000.0,
+                        roll_rad=float(pose6[3]) * 3.141592653589793 / 180.0,
+                        pitch_rad=float(pose6[4]) * 3.141592653589793 / 180.0,
+                        yaw_rad=float(pose6[5]) * 3.141592653589793 / 180.0,
+                        linear_velocity_mps=(float(v3[0]), float(v3[1]), float(v3[2])),
+                        linear_acceleration_mps2=(float(a3[0]), float(a3[1]), float(a3[2])),
+                    ),
+                )
+            )
+        sequence_id = self._next_trajectory_sequence_id()
+        self.submit_trajectory_update(
+            TrajectoryUpdate(
+                sequence_id=sequence_id,
+                mode=mode,
+                trajectory=TrajectoryCommand(
+                    sequence_id=sequence_id,
+                    waypoints=tuple(waypoints),
+                ),
+                effective_time_s=effective_time_s,
+                preserve_continuity=bool(preserve_continuity),
+            )
+        )
 
     def start_telem(self, udp_sock, controller_addr):
         from jugglebot.transport.udp_telemetry import udp_telemetry_sender

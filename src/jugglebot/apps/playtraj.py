@@ -10,24 +10,12 @@ import sys
 import time
 from pathlib import Path
 
-import numpy as np
-
 from jugglebot.planning import load_pose_cmd_csv, load_pose_cmd_full_csv
 
 
 def _send_command(sock: socket.socket, cmd: dict) -> None:
     payload = json.dumps(cmd) + "\n"
     sock.sendall(payload.encode("utf-8"))
-
-
-def _estimate_rate_hz(profile: np.ndarray, default_hz: float) -> float:
-    if profile.shape[0] < 2:
-        return float(default_hz)
-    dt = np.diff(profile[:, 0])
-    dt = dt[dt > 1e-9]
-    if dt.size == 0:
-        return float(default_hz)
-    return float(1.0 / np.median(dt))
 
 
 def _looks_like_full_csv(path: Path) -> bool:
@@ -46,7 +34,6 @@ def main() -> None:
     parser.add_argument("--csv", type=str, default="pose_cmd.csv", help="Path to pose command CSV")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Daemon TCP host")
     parser.add_argument("--port", type=int, default=5555, help="Daemon TCP port")
-    parser.add_argument("--rate-hz", type=float, default=None, help="Playback rate (defaults to inferred from timestamps)")
     parser.add_argument(
         "--full-csv",
         action="store_true",
@@ -83,7 +70,6 @@ def main() -> None:
         print(f"Error: CSV has no rows: {csv_path}")
         sys.exit(1)
 
-    rate_hz = float(args.rate_hz) if args.rate_hz is not None else _estimate_rate_hz(profile, default_hz=500.0)
     duration_s = float(profile[-1, 0] - profile[0, 0]) if profile.shape[0] > 1 else 0.0
     rows = profile.tolist()
 
@@ -103,14 +89,14 @@ def main() -> None:
 
         _send_command(sock, {"type": "pose_profile_upload", "profile": rows})
         time.sleep(max(0.0, float(args.start_delay_s)))
-        _send_command(sock, {"type": "pose_profile_start", "rate_hz": rate_hz})
+        _send_command(sock, {"type": "pose_profile_start"})
 
         print(f"Uploaded {len(rows)} trajectory rows from {csv_path}")
         if use_full_csv:
             print("Using full trajectory feedforward columns (v/a)")
         else:
             print("Using pose-only trajectory columns")
-        print(f"Started pose profile at {rate_hz:.3f} Hz")
+        print("Started pose profile")
 
         if not args.no_wait:
             # Keep connection alive while profile plays; daemon stops profiles on disconnect.
