@@ -6,10 +6,24 @@ import logging
 import threading
 
 from jugglebot.core.cable_ik import q_norm
-from jugglebot.core.types import TimingStats, TrajectoryUpdate
+from jugglebot.core.types import (
+    RuntimeHealthLevel,
+    TimingStats,
+    TrajectoryUpdate,
+    WatchdogStatus,
+)
 
 
 logger = logging.getLogger("robot")
+
+
+def _clone_watchdog_status(watchdog_status: WatchdogStatus | None):
+    if watchdog_status is None:
+        return None
+    data = watchdog_status.to_dict()
+    level = data.get("level", RuntimeHealthLevel.HEALTHY.value)
+    data["level"] = RuntimeHealthLevel(level)
+    return WatchdogStatus(**data)
 
 
 class RuntimeMailbox:
@@ -67,6 +81,7 @@ class RuntimeMailbox:
         self.snapshot_sequence = 0
         self.control_time_s = None
         self.timing_stats: TimingStats | None = None
+        self.watchdog_status: WatchdogStatus | None = None
 
     def set_hand_pose(self, t_mm, q, v_mps=None, a_mps2=None):
         with self.lock:
@@ -169,6 +184,14 @@ class RuntimeMailbox:
             if self.timing_stats is None:
                 return None
             return TimingStats(**self.timing_stats.to_dict())
+
+    def set_watchdog_status(self, watchdog_status: WatchdogStatus | None):
+        with self.lock:
+            self.watchdog_status = _clone_watchdog_status(watchdog_status)
+
+    def get_watchdog_status(self):
+        with self.lock:
+            return _clone_watchdog_status(self.watchdog_status)
 
     def next_snapshot_sequence(self):
         with self.lock:

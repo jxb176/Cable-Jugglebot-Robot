@@ -11,6 +11,7 @@ from jugglebot.core.types import (
     PoseState,
     RobotState,
     TimingStats,
+    WatchdogStatus,
 )
 from jugglebot.core.pose_utils import quat_to_rpy_rad
 from jugglebot.core.units import MM_PER_TURN
@@ -94,6 +95,7 @@ def build_robot_state_snapshot(
     sequence_id = state.next_snapshot_sequence() if sequence_id is None else int(sequence_id)
     if timing is None and hasattr(state, "get_timing_stats"):
         timing = state.get_timing_stats()
+    watchdog = state.get_watchdog_status() if hasattr(state, "get_watchdog_status") else None
     axis_mm_per_turn = list(mm_per_turn or MM_PER_TURN)
 
     with state.lock:
@@ -196,6 +198,7 @@ def build_robot_state_snapshot(
         estimated_torques_nm=tuple(_float_or_nan(v) for v in torque_rsp),
         fault_state=fault_state or FaultState(),
         timing=timing,
+        watchdog=watchdog if isinstance(watchdog, WatchdogStatus) else None,
         bus_stats=BusStats(**comm),
         debug=dict(debug or {}),
         valid=valid,

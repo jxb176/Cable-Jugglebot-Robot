@@ -60,6 +60,12 @@ class FaultSeverity(str, Enum):
     ESTOP = "estop"
 
 
+class RuntimeHealthLevel(str, Enum):
+    HEALTHY = "healthy"
+    WARNING = "warning"
+    VIOLATION = "violation"
+
+
 @dataclass(slots=True)
 class FaultState(ModelBase):
     active: bool = False
@@ -178,6 +184,22 @@ class TimingStats(ModelBase):
 
 
 @dataclass(slots=True)
+class WatchdogStatus(ModelBase):
+    level: RuntimeHealthLevel = RuntimeHealthLevel.HEALTHY
+    mode: str = "unknown"
+    message: str | None = None
+    transition_grace_active: bool = False
+    deadline_margin_s: float | None = None
+    feedback_age_s: float | None = None
+    missed_deadline_count: int = 0
+    missed_deadline_delta: int = 0
+    consecutive_missed_deadlines: int = 0
+    low_deadline_margin: bool = False
+    excessive_missed_deadlines: bool = False
+    stale_feedback: bool = False
+
+
+@dataclass(slots=True)
 class BusStats(ModelBase):
     can_rx_hz: float | None = None
     can_tx_hz: float | None = None
@@ -205,6 +227,7 @@ class RobotState(ModelBase):
     estimated_torques_nm: tuple[float, ...] = ()
     fault_state: FaultState = field(default_factory=FaultState)
     timing: TimingStats | None = None
+    watchdog: WatchdogStatus | None = None
     bus_stats: BusStats | None = None
     debug: dict[str, object] = field(default_factory=dict)
     valid: bool = True

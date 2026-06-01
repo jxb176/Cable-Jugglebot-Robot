@@ -27,53 +27,15 @@ from jugglebot.core.pose_utils import quat_from_rpy_deg
 from jugglebot.core.state import RuntimeMailbox
 from jugglebot.core.types import ActuatorCommand, ActuatorControlMode, ActuatorState, TimingStats
 from jugglebot.core.tension_control import TensionAllocatorConfig, platform_wrench_from_tensions
-from jugglebot.core.units import MM_PER_TURN, mm_to_turns
+from jugglebot.core.units import mm_to_turns
 from jugglebot.rt.clock import WallClock
+from jugglebot.rt.config import RuntimeConfig, parse_runtime_config
+from jugglebot.rt.state_machine import RuntimeMode, RuntimeStateMachine, RuntimeTransitionAction
+from jugglebot.rt.watchdog import RuntimeWatchdog, WatchdogSample
 
-# -------- ODrive CAN configuration --------
-ODRIVE_INTERFACE = "can0"
-ODRIVE_BITRATE = 1_000_000  # 1 Mbps
-AXIS_NODE_IDS = [0, 1, 2, 3, 4, 5]
-ODRIVE_COMMAND_RATE_HZ = 500.0
-ODRIVE_LOG_RATE_HZ = 2.0
-
-# -------- Capstan / units configuration --------
-# Pretension mapping: tension [N] -> capstan torque [Nm]
-CAPSTAN_RADIUS_M = 0.010  # 10 mm
-MOTOR_TORQUE_DIRECTION = 1  # Positive motor torque should reel in cable and increase tension on hardware.
-TORQUE_PER_TENSION = MOTOR_TORQUE_DIRECTION * CAPSTAN_RADIUS_M  # Nm per N  (T = F*r)
-TORQUE_CTRL_KP_N_PER_MM = 0.6
-TORQUE_CTRL_KD_N_PER_MMPS = 0.02
-TORQUE_CTRL_BIAS_N = 12.0
-TORQUE_CTRL_MIN_N = 0.0
-TORQUE_CTRL_MAX_N = 180.0
-DEFAULT_SPOOL_KP_TORQUE_PER_TURN = abs(TORQUE_PER_TENSION) * TORQUE_CTRL_KP_N_PER_MM * abs(MM_PER_TURN[0])
-DEFAULT_SPOOL_KD_TORQUE_PER_TURNPS = abs(TORQUE_PER_TENSION) * TORQUE_CTRL_KD_N_PER_MMPS * abs(MM_PER_TURN[0])
-#TASK_KP = np.diag([1200.0, 1200.0, 1800.0, 120000.0, 120000.0])
-TASK_KP = np.diag([250.0, 250.0, 400.0, 2.5, 2.5])
-#TASK_KD = np.diag([80.0, 80.0, 120.0, 0.0, 0.0])
-TASK_KD = np.diag([7.5, 7.5, 12.0, 0.05, 0.05])
-TASK_KI = np.diag([0.0, 0.0, 0.0, 0.0, 0.0])
-TASK_INT_CLIP = np.array([0.0, 0.0, 0.0, 0.35, 0.35], dtype=float)
-TASK_TMIN_N = 5.0
-TASK_TMAX_N = 180.0
-TASK_ALLOC_LAMBDA = 1e-2
-TASK_ALLOC_ITERS = 80
-TASK_ALLOC_ALPHA = 0.7
-TASK_GRAVITY_FF_Z_N = 1.2
 OUTER_CORR_KP = np.diag([1.0, 1.0, 1.0, 0.35, 0.35])
 OUTER_CORR_KD = np.diag([0.15, 0.15, 0.15, 0.05, 0.05])
 OUTER_CORR_CABLE_CLIP_M = 0.10
-# Wrench mapping sign convention for tension allocation.
-# +1.0 means tau = (+J^T)T, -1.0 means tau = (-J^T)T.
-# Keep +1.0 for current sim setup (stable empirically with existing signs/axes).
-TASK_WRENCH_FROM_TENSION_SIGN = -1.0
-
-#CLEANUP into ODRIVE library
-# ODrive controller modes (CANSimple Set_Controller_Mode)
-CONTROL_MODE_TORQUE = 1      # aka "CurrentControl" in some docs
-CONTROL_MODE_POSITION = 3
-INPUT_MODE_PASSTHROUGH = 1
 
 # Geometry (mm)
 GEOM = CableRobotGeometry()
@@ -97,14 +59,6 @@ def _expand_axis_values(value, default, axis_count: int = 6):
             raise ValueError(f"Expected length-{axis_count} list/tuple, got {len(value)}")
         return [float(v) for v in value]
     return [float(value)] * axis_count
-
-os.environ.setdefault("CAN_CHANNEL", ODRIVE_INTERFACE)
-os.environ.setdefault("CAN_BITRATE", str(ODRIVE_BITRATE))
-
-try:
-    import odrive_can as odc
-except Exception:
-    odc = None
 
 # -------- Logging setup --------
 def _init_logging():
@@ -188,15 +142,14 @@ class ControlBridge(threading.Thread):
         axis_ids=None,
         diag_log_dir: str | None = None,
         diag_log_hz: float = 100.0,
-        config: dict | None = None,
+        config: RuntimeConfig | dict | None = None,
     ):
         super().__init__(daemon=True)
         self.state = state
         self.driver = driver
-        self.axis_ids = axis_ids or [0, 1, 2, 3, 4, 5]
-        self.config = config or {}
+        self.runtime_config = config if isinstance(config, RuntimeConfig) else parse_runtime_config(config or {})
+        self.axis_ids = list(axis_ids or self.runtime_config.hardware.odrive.axis_ids)
         self._stop = threading.Event()
-        self._task_err_int = np.zeros(5, dtype=float)
         self.diag_log_dir = diag_log_dir or os.path.join(os.getcwd(), "Logs")
         self.diag_log_hz = max(1.0, float(diag_log_hz))
         self._diag_file = None
@@ -219,8 +172,7 @@ class ControlBridge(threading.Thread):
         self._sim_time_prev = None
         self._sim_wall_prev = None
         self._clock = WallClock()
-        robot_cfg = self.config.get("robot") or {}
-        self._control_rate_hz = float(robot_cfg.get("control_rate_hz", ODRIVE_COMMAND_RATE_HZ))
+        self._control_rate_hz = float(self.runtime_config.robot.control_rate_hz)
         self._loop_period_s = 1.0 / max(1.0, self._control_rate_hz)
         self._missed_deadline_count = 0
         self._loop_command_write_duration_s = 0.0
@@ -230,58 +182,68 @@ class ControlBridge(threading.Thread):
             "kinematics_duration_s": None,
             "tension_solver_duration_s": None,
         }
-        controller_cfg = (self.config.get("controller") or {}).get("spool_space") or {}
-        mm_per_turn_default = getattr(self.driver, "mm_per_turn", MM_PER_TURN)
-        self._mm_per_turn = _expand_axis_values(mm_per_turn_default, MM_PER_TURN[0], axis_count=len(self.axis_ids))
+        spool_cfg = self.runtime_config.controller.spool_space
+        tension_cfg = self.runtime_config.tension
+        allocation_cfg = self.runtime_config.allocation
+        fallback_cfg = spool_cfg.fallback_tension
+        mm_per_turn_cfg = self.runtime_config.hardware.odrive.mm_per_turn
+        self._mm_per_turn = [float(v) for v in mm_per_turn_cfg]
+        capstan_radius_m = float(self.runtime_config.geometry.capstan_radius_m)
+        torque_direction = float(self.runtime_config.hardware.odrive.torque_direction)
+        self._torque_per_tension = float(torque_direction) * float(capstan_radius_m)
         self._spool_kp_base = _expand_axis_values(
-            controller_cfg.get("kp"),
-            DEFAULT_SPOOL_KP_TORQUE_PER_TURN,
+            spool_cfg.kp,
+            spool_cfg.kp[0],
             axis_count=len(self.axis_ids),
         )
         self._spool_kd_base = _expand_axis_values(
-            controller_cfg.get("kd"),
-            DEFAULT_SPOOL_KD_TORQUE_PER_TURNPS,
+            spool_cfg.kd,
+            spool_cfg.kd[0],
             axis_count=len(self.axis_ids),
         )
-        winch_cfg = self.config.get("winches") or {}
         self._spool_torque_limit_nm = _expand_axis_values(
-            controller_cfg.get("torque_limit_nm"),
-            winch_cfg.get("torque_limit_nm", 1.0),
+            spool_cfg.torque_limit_nm,
+            spool_cfg.torque_limit_nm[0],
             axis_count=len(self.axis_ids),
         )
         self._spool_bias_tension_N = _expand_axis_values(
-            controller_cfg.get("bias_tension_N"),
-            TORQUE_CTRL_BIAS_N,
+            spool_cfg.bias_tension_n,
+            spool_cfg.bias_tension_n[0],
             axis_count=len(self.axis_ids),
         )
-        outer_cfg = controller_cfg.get("outer_taskspace_correction") or {}
+        outer_cfg = spool_cfg.outer_taskspace_correction
         self._outer_corr_kp = np.diag(
-            _expand_axis_values(outer_cfg.get("kp"), 1.0, axis_count=5)
+            _expand_axis_values(outer_cfg.kp, 1.0, axis_count=5)
         )
         self._outer_corr_kd = np.diag(
-            _expand_axis_values(outer_cfg.get("kd"), 0.15, axis_count=5)
+            _expand_axis_values(outer_cfg.kd, 0.15, axis_count=5)
         )
         self._outer_corr_cable_clip_m = np.asarray(
-            _expand_axis_values(outer_cfg.get("cable_clip_m"), OUTER_CORR_CABLE_CLIP_M, axis_count=len(self.axis_ids)),
+            _expand_axis_values(outer_cfg.cable_clip_m, OUTER_CORR_CABLE_CLIP_M, axis_count=len(self.axis_ids)),
             dtype=float,
         )
-        null_cfg = controller_cfg.get("nullspace_tension") or {}
-        self._null_tension_kp = float(null_cfg.get("kp", 0.001))
-        self._null_tension_ki = float(null_cfg.get("ki", 0.0))
-        self._null_eta_limit_m = abs(float(null_cfg.get("eta_limit_m", 0.02)))
-        self._null_sigma_ref_base = float(null_cfg.get("sigma_ref_N", 0.0))
-        self._null_sigma_rate_limit_Nps = abs(float(null_cfg.get("sigma_rate_limit_Nps", 10.0)))
-        self._null_tension_floor_N = float(null_cfg.get("tmin_N", TASK_TMIN_N))
-        self._enable_position_torque_ff = bool(controller_cfg.get("enable_torque_feedforward", True))
+        null_cfg = spool_cfg.nullspace_tension
+        self._null_tension_kp = float(null_cfg.kp)
+        self._null_tension_ki = float(null_cfg.ki)
+        self._null_eta_limit_m = abs(float(null_cfg.eta_limit_m))
+        self._null_sigma_ref_base = float(null_cfg.sigma_ref_n)
+        self._null_sigma_rate_limit_Nps = abs(float(null_cfg.sigma_rate_limit_nps))
+        self._null_tension_floor_N = float(null_cfg.tension_floor_n)
+        self._enable_position_torque_ff = bool(spool_cfg.enable_torque_feedforward)
+        self._fallback_torque_ctrl_kp_n_per_mm = float(fallback_cfg.kp_n_per_mm)
+        self._fallback_torque_ctrl_kd_n_per_mmps = float(fallback_cfg.kd_n_per_mmps)
+        self._fallback_torque_ctrl_bias_n = float(fallback_cfg.bias_n)
+        self._fallback_torque_ctrl_min_n = float(fallback_cfg.min_n)
+        self._fallback_torque_ctrl_max_n = float(fallback_cfg.max_n)
         self._spool_kp_runtime = list(self._spool_kp_base)
         self._spool_kd_runtime = list(self._spool_kd_base)
         self._tension_allocator_cfg = TensionAllocatorConfig(
-            tension_min_n=TASK_TMIN_N,
-            tension_max_n=TASK_TMAX_N,
-            regularization_lambda=TASK_ALLOC_LAMBDA,
-            iterations=TASK_ALLOC_ITERS,
-            alpha_blend=TASK_ALLOC_ALPHA,
-            wrench_from_tension_sign=TASK_WRENCH_FROM_TENSION_SIGN,
+            tension_min_n=float(tension_cfg.tension_min_n),
+            tension_max_n=float(tension_cfg.tension_max_n),
+            regularization_lambda=float(tension_cfg.regularization_lambda),
+            iterations=int(allocation_cfg.max_iters),
+            alpha_blend=float(tension_cfg.alpha_blend),
+            wrench_from_tension_sign=float(allocation_cfg.wrench_from_tension_sign),
         )
         self._nullspace_controller_cfg = NullspaceControllerConfig(
             kp=self._null_tension_kp,
@@ -300,8 +262,8 @@ class ControlBridge(threading.Thread):
             outer_corr_kd=self._outer_corr_kd.copy(),
             outer_corr_cable_clip_m=np.asarray(self._outer_corr_cable_clip_m, dtype=float).copy(),
             spool_bias_tension_n=np.asarray(self._spool_bias_tension_N, dtype=float).copy(),
-            torque_per_tension=float(TORQUE_PER_TENSION),
-            gravity_ff_z_n=float(TASK_GRAVITY_FF_Z_N),
+            torque_per_tension=float(self._torque_per_tension),
+            gravity_ff_z_n=float(spool_cfg.gravity_ff_z_n),
             enable_position_torque_ff=self._enable_position_torque_ff,
             tension_allocator=self._tension_allocator_cfg,
             nullspace=self._nullspace_controller_cfg,
@@ -311,30 +273,29 @@ class ControlBridge(threading.Thread):
             mm_per_turn=tuple(float(v) for v in self._mm_per_turn),
             home_cable_mm=tuple(float(v) for v in HOME_CABLE_MM),
             geometry=GEOM,
-            torque_per_tension=float(TORQUE_PER_TENSION),
-            torque_ctrl_kp_n_per_mm=float(TORQUE_CTRL_KP_N_PER_MM),
-            torque_ctrl_kd_n_per_mmps=float(TORQUE_CTRL_KD_N_PER_MMPS),
-            torque_ctrl_bias_n=float(TORQUE_CTRL_BIAS_N),
-            torque_ctrl_min_n=float(TORQUE_CTRL_MIN_N),
-            torque_ctrl_max_n=float(TORQUE_CTRL_MAX_N),
+            torque_per_tension=float(self._torque_per_tension),
+            torque_ctrl_kp_n_per_mm=float(self._fallback_torque_ctrl_kp_n_per_mm),
+            torque_ctrl_kd_n_per_mmps=float(self._fallback_torque_ctrl_kd_n_per_mmps),
+            torque_ctrl_bias_n=float(self._fallback_torque_ctrl_bias_n),
+            torque_ctrl_min_n=float(self._fallback_torque_ctrl_min_n),
+            torque_ctrl_max_n=float(self._fallback_torque_ctrl_max_n),
         )
         self._taskspace_controller_state = TaskspaceControllerState(null_sigma_ref_n=float(self._null_sigma_ref_base))
-        estimator_cfg = self.config.get("estimator") or {}
-        odrive_cfg = (self.config.get("hardware") or {}).get("odrive") or {}
-        pose_est_rate_hz = float(estimator_cfg.get("rate_hz", odrive_cfg.get("pose_est_rate_hz", 100.0)))
         self._platform_estimator = CablePlatformEstimator(
             axis_ids=self.axis_ids,
             mm_per_turn=self._mm_per_turn,
             home_cable_mm=HOME_CABLE_MM,
             geometry=GEOM,
-            update_rate_hz=pose_est_rate_hz,
+            update_rate_hz=float(self.runtime_config.estimator.rate_hz),
         )
-
-        #Apply the current state version to avoid auto applying the default by setting these to -1.  Perhaps reconsider this for desired auto init behavior later on
-        self._applied_state_version = state.get_state_version()
-        self._applied_home_version = state.get_home_version()
-        self._applied_pret_version = state.get_pretension_version()
-        self._applied_spool_gain_version = -1
+        self._state_machine = RuntimeStateMachine.from_mailbox(self.state, self.axis_ids)
+        self._watchdog = RuntimeWatchdog(
+            status_report_period_s=float(self.runtime_config.rt.status_report_period_s),
+            deadline_warning_margin_s=1e-3 * float(self.runtime_config.rt.deadline_warning_margin_ms),
+            deadline_warning_missed_per_report=int(self.runtime_config.rt.deadline_warning_missed_per_report),
+            feedback_age_warning_s=1e-3 * float(self.runtime_config.rt.feedback_age_warning_ms),
+            transition_grace_s=float(self.runtime_config.rt.transition_grace_s),
+        )
 
     def _supports_position_command_with_ff(self) -> bool:
         caps = getattr(self.driver, "capabilities", None)
@@ -445,38 +406,15 @@ class ControlBridge(threading.Thread):
         self._last_sigma_meas = float(debug.sigma_meas_n)
         self._last_eta_null_m = float(debug.eta_null_m)
 
-    def _build_state_commands(self, st: str):
-        commands = []
-        if st == "enable":
-            for aid in self.axis_ids:
-                commands.append(
-                    ActuatorCommand(
-                        axis_id=aid,
-                        control_mode=ActuatorControlMode.POSITION,
-                        apply_control_mode=True,
-                        enable=True,
-                    )
-                )
-        elif st == "pretension":
-            for aid in self.axis_ids:
-                commands.append(
-                    ActuatorCommand(
-                        axis_id=aid,
-                        control_mode=ActuatorControlMode.TORQUE,
-                        apply_control_mode=True,
-                        enable=True,
-                    )
-                )
-        elif st in ("disable", "estop"):
-            for aid in self.axis_ids:
-                commands.append(
-                    ActuatorCommand(
-                        axis_id=aid,
-                        control_mode=ActuatorControlMode.DISABLED,
-                        enable=False,
-                    )
-                )
-        return commands
+    def _execute_state_machine_actions(self, result):
+        if result.transition is not None:
+            self._apply_state_transition(result.transition)
+        if result.apply_home:
+            self._apply_home()
+        if result.apply_pretension_mode:
+            self._apply_pretension_mode()
+        if result.apply_spool_gain_update:
+            self._apply_spool_gain_multipliers()
 
     def run(self):
         logger.info("[CTRL] Starting control bridge...")
@@ -485,8 +423,7 @@ class ControlBridge(threading.Thread):
             self.driver.start()
             self._open_diag_log()
 
-            # main loop (~500 Hz)
-            last_log = self._clock.now_monotonic()
+            # main loop at configured control rate
             while not self._stop.is_set():
                 loop_start_perf = self._clock.now_monotonic()
                 if self._last_loop_start_perf is None:
@@ -505,37 +442,16 @@ class ControlBridge(threading.Thread):
                 read_start_perf = self._clock.now_monotonic()
                 actuator_states = self._read_actuator_states()
                 read_duration_s = max(0.0, self._clock.now_monotonic() - read_start_perf)
-                st = self.state.get_state()
-                sv = self.state.get_state_version()
-
-                # Apply state transitions when version changes
-                if sv != self._applied_state_version:
-                    self._apply_state(st)
-                    self._applied_state_version = sv
-
-                # Apply HOME request (one-shot) when version changes
-                hv = self.state.get_home_version()
-                if hv != self._applied_home_version:
-                    self._apply_home()
-                    self._applied_home_version = hv
-
-                # Apply PRETENSION request when version changes
-                pv = self.state.get_pretension_version()
-                if pv != self._applied_pret_version:
-                    self._apply_pretension_mode()
-                    self._applied_pret_version = pv
-
-                gv = self.state.get_spool_gain_version()
-                if gv != self._applied_spool_gain_version:
-                    self._apply_spool_gain_multipliers()
-                    self._applied_spool_gain_version = gv
+                sm_result = self._state_machine.step(self.state)
+                st = sm_result.mode.value
+                self._execute_state_machine_actions(sm_result)
 
                 observer_start_perf = self._clock.now_monotonic()
                 q_cur, qd_cur, j_cur = self._set_platform_estimate_from_feedback(actuator_states)
                 observer_duration_s = max(0.0, self._clock.now_monotonic() - observer_start_perf)
 
                 # Stream setpoints if enabled
-                if st == "enable":
+                if sm_result.allow_taskspace_streaming:
                     try:
                         if self._supports_position_command_with_ff():
                             commands = self._run_taskspace_spool_control(
@@ -552,7 +468,7 @@ class ControlBridge(threading.Thread):
                         # IMPORTANT: don't kill the bridge if IK/units blow up
                         logger.error(f"[CTRL] ENABLE streaming error: {e}")
 
-                elif st == "pretension":
+                elif sm_result.allow_pretension_streaming:
                     self._last_tau_plat_des[:] = np.nan
                     upper_N, lower_N = self.state.get_pretension()
 
@@ -562,11 +478,11 @@ class ControlBridge(threading.Thread):
                     for i in (0, 2, 4):
                         if i < len(self.axis_ids):
                             tension_cmd[i] = upper_N
-                            torque_cmd[i] = upper_N * TORQUE_PER_TENSION
+                            torque_cmd[i] = upper_N * self._torque_per_tension
                     for i in (1, 3, 5):
                         if i < len(self.axis_ids):
                             tension_cmd[i] = lower_N
-                            torque_cmd[i] = lower_N * TORQUE_PER_TENSION
+                            torque_cmd[i] = lower_N * self._torque_per_tension
 
                     commands = [
                         ActuatorCommand(
@@ -600,22 +516,33 @@ class ControlBridge(threading.Thread):
                 deadline_margin_s = loop_deadline_perf - self._clock.now_monotonic()
                 if deadline_margin_s < 0.0:
                     self._missed_deadline_count += 1
-                self.state.set_timing_stats(
-                    TimingStats(
+                timing_stats = TimingStats(
+                    loop_period_s=loop_period_s,
+                    read_duration_s=read_duration_s,
+                    observer_duration_s=observer_duration_s,
+                    trajectory_duration_s=self._last_control_step_timings["trajectory_duration_s"],
+                    kinematics_duration_s=self._last_control_step_timings["kinematics_duration_s"],
+                    tension_solver_duration_s=self._last_control_step_timings["tension_solver_duration_s"],
+                    command_write_duration_s=self._loop_command_write_duration_s,
+                    total_loop_duration_s=total_loop_duration_s,
+                    deadline_margin_s=deadline_margin_s,
+                    missed_deadline_count=self._missed_deadline_count,
+                    feedback_age_s=feedback_age_s,
+                    bus_utilization_estimate=bus_utilization_estimate,
+                )
+                self.state.set_timing_stats(timing_stats)
+                watchdog_eval = self._watchdog.observe(
+                    WatchdogSample(
+                        now_perf_s=now,
+                        mode=st,
                         loop_period_s=loop_period_s,
-                        read_duration_s=read_duration_s,
-                        observer_duration_s=observer_duration_s,
-                        trajectory_duration_s=self._last_control_step_timings["trajectory_duration_s"],
-                        kinematics_duration_s=self._last_control_step_timings["kinematics_duration_s"],
-                        tension_solver_duration_s=self._last_control_step_timings["tension_solver_duration_s"],
-                        command_write_duration_s=self._loop_command_write_duration_s,
                         total_loop_duration_s=total_loop_duration_s,
                         deadline_margin_s=deadline_margin_s,
                         missed_deadline_count=self._missed_deadline_count,
                         feedback_age_s=feedback_age_s,
-                        bus_utilization_estimate=bus_utilization_estimate,
                     )
                 )
+                self.state.set_watchdog_status(watchdog_eval.status)
                 read_ms = 1000.0 * read_duration_s
                 observer_ms = 1000.0 * observer_duration_s
                 traj_ms = (
@@ -642,27 +569,36 @@ class ControlBridge(threading.Thread):
                 if self._diag_writer is not None and (now - self._diag_last_log_perf) >= (1.0 / self.diag_log_hz):
                     self._write_diag_row(now)
                     self._diag_last_log_perf = now
-                if now - last_log >= 1.0:
+                if watchdog_eval.report_due:
+                    log_fn = logger.info
+                    if watchdog_eval.log_as_warning:
+                        log_fn = logger.warning
+                    health_note = (
+                        f", watchdog={watchdog_eval.status.message}"
+                        if watchdog_eval.status.message
+                        else ""
+                    )
                     if np.isfinite(self._sim_time_s) and np.isfinite(self._sim_rt_factor):
-                        logger.info(
+                        log_fn(
                             f"[CTRL] streaming {len(self.axis_ids)} axes, state={st}, "
                             f"sim_time={self._sim_time_s:.3f}s, rt_factor={self._sim_rt_factor:.3f}x, "
                             f"deadline_margin={deadline_margin_ms:.2f} ms, "
-                            f"missed={self._missed_deadline_count}, "
+                            f"missed={self._missed_deadline_count} (+{watchdog_eval.missed_since_last_report}), "
                             f"read={read_ms:.2f} ms observer={observer_ms:.2f} ms "
                             f"traj={traj_ms:.2f} ms kin={kin_ms:.2f} ms solver={solver_ms:.2f} ms "
                             f"write={write_ms:.2f} ms loop={loop_ms:.2f} ms fb_age={feedback_age_ms:.2f} ms"
+                            f"{health_note}"
                         )
                     else:
-                        logger.info(
+                        log_fn(
                             f"[CTRL] streaming {len(self.axis_ids)} axes, state={st}, "
                             f"deadline_margin={deadline_margin_ms:.2f} ms, "
-                            f"missed={self._missed_deadline_count}, "
+                            f"missed={self._missed_deadline_count} (+{watchdog_eval.missed_since_last_report}), "
                             f"read={read_ms:.2f} ms observer={observer_ms:.2f} ms "
                             f"traj={traj_ms:.2f} ms kin={kin_ms:.2f} ms solver={solver_ms:.2f} ms "
                             f"write={write_ms:.2f} ms loop={loop_ms:.2f} ms fb_age={feedback_age_ms:.2f} ms"
+                            f"{health_note}"
                         )
-                    last_log = now
 
                 self._clock.sleep_until(loop_deadline_perf)
 
@@ -771,32 +707,34 @@ class ControlBridge(threading.Thread):
             f"kp={kp_mult:.3f}, kd={kd_mult:.3f}, runtime_applied={applied}"
         )
 
-    def _apply_state(self, st: str):
-        """Apply high-level state to all axes."""
+    def _reset_runtime_state(self):
+        self._last_torque_cmd_nm = [0.0] * 6
+        self._last_tension_cmd_N = [0.0] * 6
+        self._last_tau_plat_des[:] = np.nan
+        self._taskspace_controller_state = TaskspaceControllerState(
+            null_sigma_ref_n=float(self._null_sigma_ref_base)
+        )
+        self._last_sigma_ref = float("nan")
+        self._last_sigma_meas = float("nan")
+        self._last_eta_null_m = 0.0
+        self._last_spool_null_cmd_mm = [0.0] * 6
+
+    def _apply_state_transition(self, transition: RuntimeTransitionAction):
+        """Apply a planned runtime-mode transition."""
         try:
-            self._write_command_batch(self._build_state_commands(st))
+            self._write_command_batch(transition.commands)
             for aid in self.axis_ids:
-                if st == "enable":
+                if transition.mode is RuntimeMode.ENABLE:
                     logger.info(f"[CTRL] axis {aid}: POSITION + CLOSED_LOOP_CONTROL")
-                elif st == "pretension":
+                elif transition.mode is RuntimeMode.PRETENSION:
                     logger.info(f"[CTRL] axis {aid}: TORQUE + CLOSED_LOOP_CONTROL")
-                elif st in ("disable", "estop"):
+                elif transition.mode in (RuntimeMode.DISABLE, RuntimeMode.ESTOP):
                     logger.info(f"[CTRL] axis {aid}: IDLE")
-            if st in ("disable", "estop"):
-                self._last_torque_cmd_nm = [0.0] * 6
-                self._last_tension_cmd_N = [0.0] * 6
-                self._last_tau_plat_des[:] = np.nan
-                self._task_err_int[:] = 0.0
-                self._taskspace_controller_state = TaskspaceControllerState(
-                    null_sigma_ref_n=float(self._null_sigma_ref_base)
-                )
-                self._last_sigma_ref = float("nan")
-                self._last_sigma_meas = float("nan")
-                self._last_eta_null_m = 0.0
-                self._last_spool_null_cmd_mm = [0.0] * 6
+            if transition.reset_runtime_state:
+                self._reset_runtime_state()
 
         except Exception as e:
-            logger.error(f"[CTRL] _apply_state error: {e}")
+            logger.error(f"[CTRL] _apply_state_transition error: {e}")
 
     def _apply_home(self):
         """
@@ -820,7 +758,8 @@ class ControlBridge(threading.Thread):
     def _apply_pretension_mode(self):
         """Put all axes into torque control + closed loop."""
         try:
-            self._write_command_batch(self._build_state_commands("pretension"))
+            commands = self._state_machine.build_mode_commands(RuntimeMode.PRETENSION)
+            self._write_command_batch(commands)
             logger.info("[PRET] applied torque control mode to all axes")
         except Exception as e:
             logger.error(f"[PRET] _apply_pretension_mode error: {e}")
@@ -892,7 +831,7 @@ class ControlBridge(threading.Thread):
                     tau_rsp = platform_wrench_from_tensions(
                         J_len_plat,
                         tension_rsp,
-                        wrench_from_tension_sign=TASK_WRENCH_FROM_TENSION_SIGN,
+                        wrench_from_tension_sign=self._tension_allocator_cfg.wrench_from_tension_sign,
                     )
             except Exception:
                 pass
@@ -921,26 +860,3 @@ class ControlBridge(threading.Thread):
         self._diag_writer.writerow([flat.get(key, "") for key in self._diag_row_keys])
         if self._diag_file is not None:
             self._diag_file.flush()
-
-if __name__ == "__main__":
-    from jugglebot.transport.axes_logger import axes_state_logger
-    from jugglebot.transport.tcp_commands import tcp_command_server
-
-    state = RuntimeMailbox()
-    can_ok = ensure_can_interface_up(ODRIVE_INTERFACE, ODRIVE_BITRATE)
-    if not can_ok:
-        logger.warning("[CAN] Continuing without CAN up")
-
-    odrv_bridge = ControlBridge(state, None)  # <-- driver is None for now
-    odrv_bridge.start()
-
-    threading.Thread(target=tcp_command_server, args=(state,), daemon=True).start()
-    threading.Thread(target=axes_state_logger, args=(state,), daemon=True).start()
-
-    logger.info("Robot server running. Press Ctrl+C to exit.")
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logger.info("Shutting down...")
-        odrv_bridge.stop()

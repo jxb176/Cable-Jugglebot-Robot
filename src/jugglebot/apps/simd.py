@@ -20,9 +20,9 @@ from jugglebot.rt.runner import (
 )
 from jugglebot.core.state import RuntimeMailbox
 from jugglebot.io.simulated_actuator_bus import SimulatedActuatorBus
+from jugglebot.rt.config import load_runtime_config
 from jugglebot.transport.axes_logger import axes_state_logger
 from jugglebot.transport.tcp_commands import tcp_command_server
-from jugglebot.config import load_config
 
 
 def main():
@@ -46,15 +46,15 @@ def main():
     args = parser.parse_args()
 
     # Load configuration
-    config = load_config(args.config)
-    mode = config.get("robot", {}).get("mode", "simulation")
+    config = load_runtime_config(args.config)
+    mode = config.robot.mode
     if mode != "simulation":
         print(f"Error: simd requires mode=simulation, but config has mode={mode}")
         sys.exit(1)
 
     # Setup logging
     logging.basicConfig(
-        level=getattr(logging, config.get("logging", {}).get("level", "INFO")),
+        level=getattr(logging, config.logging.level),
         format="%(asctime)s [%(levelname)s] %(message)s"
     )
     logger = logging.getLogger(__name__)
@@ -65,23 +65,21 @@ def main():
     state = RuntimeMailbox()
 
     # Setup simulation driver
-    odrive_config = config.get("hardware", {}).get("odrive", {})
-    axis_ids = odrive_config.get("axis_ids", [0, 1, 2, 3, 4, 5])
-    spool_cfg = config.get("controller", {}).get("spool_space", {})
-    winch_cfg = config.get("winches", {})
+    axis_ids = list(config.hardware.odrive.axis_ids)
+    spool_cfg = config.controller.spool_space
 
     # Create simulation actuator bus
     driver = SimulatedActuatorBus(
         axis_ids=axis_ids,
         enable_viewer=args.viewer,
-        spool_kp=spool_cfg.get("kp"),
-        spool_kd=spool_cfg.get("kd"),
-        torque_limit_nm=spool_cfg.get("torque_limit_nm", winch_cfg.get("torque_limit_nm")),
+        spool_kp=list(spool_cfg.kp),
+        spool_kd=list(spool_cfg.kd),
+        torque_limit_nm=list(spool_cfg.torque_limit_nm),
     )
     sim_bridge = ControlBridge(state, driver, config=config)
     sim_bridge.start()
 
-    auto_enable = bool(args.auto_enable or config.get("robot", {}).get("auto_enable_on_startup", False))
+    auto_enable = bool(args.auto_enable or config.robot.auto_enable_on_startup)
     if auto_enable:
         state.set_state("enable")
         logger.info("Auto-enable on startup is active")

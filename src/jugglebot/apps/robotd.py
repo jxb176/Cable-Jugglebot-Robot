@@ -21,9 +21,9 @@ from jugglebot.rt.runner import (
 )
 from jugglebot.core.state import RuntimeMailbox
 from jugglebot.io.odrive_can_bus import ODriveCanBus
+from jugglebot.rt.config import load_runtime_config
 from jugglebot.transport.axes_logger import axes_state_logger
 from jugglebot.transport.tcp_commands import tcp_command_server
-from jugglebot.config import load_config
 
 
 def main():
@@ -37,15 +37,15 @@ def main():
     args = parser.parse_args()
 
     # Load configuration
-    config = load_config(args.config)
-    mode = config.get("robot", {}).get("mode", "hardware")
+    config = load_runtime_config(args.config)
+    mode = config.robot.mode
     if mode != "hardware":
         print(f"Error: robotd requires mode=hardware, but config has mode={mode}")
         sys.exit(1)
 
     # Setup logging
     logging.basicConfig(
-        level=getattr(logging, config.get("logging", {}).get("level", "INFO")),
+        level=getattr(logging, config.logging.level),
         format="%(asctime)s [%(levelname)s] %(message)s"
     )
     logger = logging.getLogger(__name__)
@@ -56,30 +56,24 @@ def main():
     state = RuntimeMailbox()
 
     # Setup CAN interface
-    can_config = config.get("hardware", {}).get("can", {})
-    can_interface = can_config.get("interface", "can0")
-    can_bitrate = can_config.get("bitrate", 1000000)
+    can_interface = config.hardware.can.interface
+    can_bitrate = config.hardware.can.bitrate
 
     can_ok = ensure_can_interface_up(can_interface, can_bitrate)
     if not can_ok:
         logger.warning("CAN interface not available, continuing anyway")
 
     # Setup ODrive bridge
-    odrive_config = config.get("hardware", {}).get("odrive", {})
-    axis_ids = odrive_config.get("axis_ids", [0, 1, 2, 3, 4, 5])
+    axis_ids = list(config.hardware.odrive.axis_ids)
 
     # Create hardware actuator bus
-    mm_per_turn = odrive_config.get("mm_per_turn", [-62.832] * len(axis_ids))
-    capstan_radius_m = float(config.get("geometry", {}).get("capstan_radius_m", 0.01))
-    torque_direction = float(odrive_config.get("torque_direction", 1.0))
-    pose_est_rate_hz = float(odrive_config.get("pose_est_rate_hz", 100.0))
     driver = ODriveCanBus(
         canbus=can_interface,
         axis_ids=axis_ids,
-        mm_per_turn=mm_per_turn,
-        capstan_radius_m=capstan_radius_m,
-        torque_direction=torque_direction,
-        pose_est_rate_hz=pose_est_rate_hz,
+        mm_per_turn=list(config.hardware.odrive.mm_per_turn),
+        capstan_radius_m=config.geometry.capstan_radius_m,
+        torque_direction=config.hardware.odrive.torque_direction,
+        pose_est_rate_hz=config.estimator.rate_hz,
         can_bitrate=float(can_bitrate),
     )
     odrv_bridge = ControlBridge(state, driver, config=config)
