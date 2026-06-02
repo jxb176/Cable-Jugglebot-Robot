@@ -3,7 +3,14 @@ import struct
 import threading
 import enum
 import time
+import logging
 from collections import deque
+
+logger = logging.getLogger("robot")
+
+_FF_SCALE = 1000.0
+_FF_INT16_MIN = -32768
+_FF_INT16_MAX = 32767
 
 
 class AxisState(enum.IntEnum):
@@ -16,6 +23,7 @@ class ODriveAxis:
     def __init__(self, axis_id, manager):
         self.axis_id = axis_id
         self.manager = manager
+        self._ff_clamp_active = False
         self.callbacks = {
             "encoder": None,
             "bus": None,
@@ -31,10 +39,27 @@ class ODriveAxis:
         self.manager._send(self.axis_id, 0x07, int(state).to_bytes(4, "little"))
 
     def set_input_pos(self, pos_turns, vel_turns=0.0, torque=0.0):
+        vel_raw = int(float(vel_turns) * _FF_SCALE)
+        torque_raw = int(float(torque) * _FF_SCALE)
+        vel_clamped = max(_FF_INT16_MIN, min(_FF_INT16_MAX, vel_raw))
+        torque_clamped = max(_FF_INT16_MIN, min(_FF_INT16_MAX, torque_raw))
+        clamped = (vel_clamped != vel_raw) or (torque_clamped != torque_raw)
+        if clamped and not self._ff_clamp_active:
+            logger.warning(
+                "[ODRIVE] axis %d position FF clamped: "
+                "requested vel_ff=%.3f turns/s torque_ff=%.3f Nm -> "
+                "clamped vel_ff=%.3f turns/s torque_ff=%.3f Nm",
+                self.axis_id,
+                float(vel_turns),
+                float(torque),
+                float(vel_clamped) / _FF_SCALE,
+                float(torque_clamped) / _FF_SCALE,
+            )
+        self._ff_clamp_active = clamped
         payload = (
             struct.pack("<f", pos_turns)
-            + int(vel_turns * 1000).to_bytes(2, "little", signed=True)
-            + int(torque * 1000).to_bytes(2, "little", signed=True)
+            + int(vel_clamped).to_bytes(2, "little", signed=True)
+            + int(torque_clamped).to_bytes(2, "little", signed=True)
         )
         self.manager._send(self.axis_id, 0x0C, payload)
 
