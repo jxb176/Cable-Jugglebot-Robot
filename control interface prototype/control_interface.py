@@ -403,6 +403,7 @@ class RobotGUI(QWidget):
         self.plot_pose.scene().addItem(self.pose_rot_vb)
         self.plot_pose.getAxis("right").linkToView(self.pose_rot_vb)
         self.pose_rot_vb.setXLink(self.plot_pose)
+        self.pose_rot_vb.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
 
         def _sync_pose_views():
             vb_left = self.plot_pose.getPlotItem().vb
@@ -439,8 +440,8 @@ class RobotGUI(QWidget):
             )
             self.pose_rot_vb.addItem(cmd_curve)
             self.pose_rot_vb.addItem(rsp_curve)
-            self.plot_pose.addItem(cmd_curve)
-            self.plot_pose.addItem(rsp_curve)
+            self.plot_pose.plotItem.legend.addItem(cmd_curve, f"{name} cmd [deg]")
+            self.plot_pose.plotItem.legend.addItem(rsp_curve, f"{name} rsp [deg]")
             self.pose_cmd_rp_curves.append(cmd_curve)
             self.pose_rsp_rp_curves.append(rsp_curve)
 

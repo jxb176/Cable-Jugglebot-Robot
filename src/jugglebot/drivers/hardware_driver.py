@@ -108,6 +108,14 @@ class HardwareDriver(RobotDriver):
 
                 logger.info(f"Registered axis {aid}")
 
+                # Explicitly request one heartbeat on startup so axis state /
+                # error telemetry populates even if the drive is not currently
+                # broadcasting heartbeats cyclically.
+                try:
+                    axis.request_heartbeat()
+                except Exception as exc:
+                    logger.debug(f"Initial heartbeat request failed for axis {aid}: {exc}")
+
         except Exception as e:
             logger.error(f"Failed to start hardware driver: {e}")
             raise
@@ -204,6 +212,14 @@ class HardwareDriver(RobotDriver):
             axis.set_axis_state(AxisState.CLOSED_LOOP_CONTROL)
         else:
             logger.warning(f"Unknown axis state: {state}")
+            return
+
+        # Refresh heartbeat-backed status fields so GUI state/error telemetry
+        # tracks mode transitions promptly.
+        try:
+            axis.request_heartbeat()
+        except Exception as exc:
+            logger.debug(f"Heartbeat refresh request failed for axis {axis_id}: {exc}")
 
     def set_absolute_position(self, axis_id: int, position: float):
         """Set absolute position reference."""
