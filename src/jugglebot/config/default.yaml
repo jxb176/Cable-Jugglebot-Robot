@@ -41,7 +41,7 @@ controller:
       min_n: 0.0
       max_n: 150.0
     outer_taskspace_correction:
-      kp: [1.0, 1.0, 1.0, 0.35, 0.35]
+      kp: [1.0, 1.0, 1.0, 1.0, 1.0]
       kd: [0.0, 0.0, 0.0, 0.0, 0.0]
       cable_clip_m: [0.10, 0.10, 0.10, 0.10, 0.10, 0.10]
     nullspace_tension:
@@ -70,6 +70,8 @@ hardware:
     axis_ids: [0, 1, 2, 3, 4, 5]
     mm_per_turn: [-62.832, -62.832, -62.832, -62.832, -62.832, -62.832]
     torque_direction: 1.0
+    input_vel_scale: 500.0
+    input_torque_scale: 1000.0
 
 logging:
   level: INFO
