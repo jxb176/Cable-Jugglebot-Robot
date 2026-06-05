@@ -129,6 +129,14 @@ def _collect_config_roots(device: Any, axis_name: str) -> OrderedDict[str, Any]:
         child_cfg = _safe_getattr(child_obj, "config")
         if child_cfg is not None and not isinstance(child_cfg, Exception) and not callable(child_cfg):
             roots[f"odrv.{axis_name}.{child_name}.config"] = child_cfg
+        # Some persistent config objects live one level deeper under runtime
+        # containers such as axis.motor.motor_thermistor.config. Discover
+        # those nested config leaves without broadening the dump to all
+        # runtime-state subtrees.
+        for grandchild_name, grandchild_obj in _iter_named_children(child_obj):
+            grandchild_cfg = _safe_getattr(grandchild_obj, "config")
+            if grandchild_cfg is not None and not isinstance(grandchild_cfg, Exception) and not callable(grandchild_cfg):
+                roots[f"odrv.{axis_name}.{child_name}.{grandchild_name}.config"] = grandchild_cfg
 
     return roots
 
