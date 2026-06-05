@@ -31,6 +31,8 @@ GLOBAL_AXIS_CAN_SETTINGS = {
 GLOBAL_AXIS_CONTROLLER_SETTINGS = {
     "input_filter_bandwidth": 150.0,
     "input_mode": 3,
+    "input_torque_scale": 1000.0,
+    "input_vel_scale": 500.0,
     "pos_gain": 50.0,
     "torque_ramp_rate": 0.01,
     "vel_gain": 0.01,
@@ -313,6 +315,8 @@ def _build_changes(args: argparse.Namespace, device_cfg: dict[str, Any]) -> list
     controller_overrides = {
         "input_filter_bandwidth": args.input_filter_bandwidth,
         "input_mode": args.input_mode,
+        "input_torque_scale": args.input_torque_scale,
+        "input_vel_scale": args.input_vel_scale,
         "pos_gain": args.pos_gain,
         "torque_ramp_rate": args.torque_ramp_rate,
         "vel_gain": args.vel_gain,
@@ -421,6 +425,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--version-msg-rate-ms", type=int, default=None)
     parser.add_argument("--input-filter-bandwidth", type=float, default=None)
     parser.add_argument("--input-mode", type=int, default=None)
+    parser.add_argument("--input-torque-scale", type=float, default=None)
+    parser.add_argument("--input-vel-scale", type=float, default=None)
     parser.add_argument("--pos-gain", type=float, default=None)
     parser.add_argument("--torque-ramp-rate", type=float, default=None)
     parser.add_argument("--vel-gain", type=float, default=None)

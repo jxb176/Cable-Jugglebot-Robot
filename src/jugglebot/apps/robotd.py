@@ -73,6 +73,8 @@ def main():
         mm_per_turn=list(config.hardware.odrive.mm_per_turn),
         capstan_radius_m=config.geometry.capstan_radius_m,
         torque_direction=config.hardware.odrive.torque_direction,
+        input_vel_scale=float(config.hardware.odrive.input_vel_scale),
+        input_torque_scale=float(config.hardware.odrive.input_torque_scale),
         pose_est_rate_hz=config.estimator.rate_hz,
         can_bitrate=float(can_bitrate),
     )

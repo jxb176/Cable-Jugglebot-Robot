@@ -38,6 +38,8 @@ class HardwareDriver(RobotDriver):
         mm_per_turn: List[float] = None,
         capstan_radius_m: float = 0.01,
         torque_direction: float = 1.0,
+        input_vel_scale: float = 1000.0,
+        input_torque_scale: float = 1000.0,
         pose_est_rate_hz: float = 100.0,
         can_bitrate: float = 1_000_000.0,
         can_frame_bits_est: float = 128.0,
@@ -72,6 +74,8 @@ class HardwareDriver(RobotDriver):
             self.mm_per_turn = [float(v) for v in mm_per_turn]
         self.capstan_radius_m = max(1e-9, float(capstan_radius_m))
         self.torque_direction = float(torque_direction)
+        self.input_vel_scale = float(input_vel_scale)
+        self.input_torque_scale = float(input_torque_scale)
 
         self._geom = CableRobotGeometry()
         self._home_q = (1.0, 0.0, 0.0, 0.0)
@@ -90,7 +94,16 @@ class HardwareDriver(RobotDriver):
         """Start the ODrive CAN manager."""
         logger.info(f"Starting ODrive CAN manager on {self.canbus}")
         try:
-            self.manager = ODriveCanManager(self.canbus)
+            self.manager = ODriveCanManager(
+                self.canbus,
+                input_vel_scale=self.input_vel_scale,
+                input_torque_scale=self.input_torque_scale,
+            )
+            logger.info(
+                "ODrive FF scales: input_vel_scale=%.3f input_torque_scale=%.3f",
+                self.input_vel_scale,
+                self.input_torque_scale,
+            )
 
             # Register axes
             for aid in self.axis_ids:

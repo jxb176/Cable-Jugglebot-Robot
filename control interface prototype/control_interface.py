@@ -20,10 +20,17 @@ from PyQt6.QtCore import Qt, QTimer
 import pyqtgraph as pg
 
 try:
-    from jugglebot.planning import load_profile_yaml, build_path_from_profile
+    from jugglebot.planning import (
+        load_profile_yaml,
+        build_path_from_profile,
+        load_pattern_yaml,
+        build_traj_from_pattern,
+    )
 except Exception:
     load_profile_yaml = None
     build_path_from_profile = None
+    load_pattern_yaml = None
+    build_traj_from_pattern = None
 
 # Networking configuration
 ROBOT_HOST = "jugglepi.local"  # <-- set to your Raspberry Pi IP or hostname
@@ -922,7 +929,12 @@ class RobotGUI(QWidget):
 
     def populate_jugglepath_dropdown(self):
         self.jp_profile_combo.clear()
-        if load_profile_yaml is None or build_path_from_profile is None:
+        if (
+            load_profile_yaml is None
+            or build_path_from_profile is None
+            or load_pattern_yaml is None
+            or build_traj_from_pattern is None
+        ):
             self.jp_profile_combo.addItem("(jugglebot.planning unavailable)")
             self.jp_profile_combo.setEnabled(False)
             return
@@ -948,17 +960,37 @@ class RobotGUI(QWidget):
         if not name or name.startswith("("):
             self.status_label.setText("Select a valid JugglePath profile")
             return
-        if load_profile_yaml is None or build_path_from_profile is None:
+        if (
+            load_profile_yaml is None
+            or build_path_from_profile is None
+            or load_pattern_yaml is None
+            or build_traj_from_pattern is None
+        ):
             self.status_label.setText("jugglebot.planning import failed")
             return
 
         try:
             profile_path = self._jugglepath_profiles_dir() / name
-            profile = load_profile_yaml(str(profile_path))
             rate = float(self.profile_rate.value())
-            path, cmd_hz = build_path_from_profile(profile, command_rate_hz=rate)
-            result = path.build()
-            traj = result.traj
+
+            traj = None
+            source_kind = "profile"
+
+            try:
+                profile = load_profile_yaml(str(profile_path))
+                path, _cmd_hz = build_path_from_profile(profile, command_rate_hz=rate)
+                result = path.build()
+                traj = result.traj
+            except Exception:
+                pattern = load_pattern_yaml(str(profile_path))
+                traj, _cmd_hz = build_traj_from_pattern(
+                    pattern,
+                    hand="right",
+                    command_rate_hz=rate,
+                    cycles=1,
+                )
+                source_kind = "pattern"
+
             if traj.shape[0] == 0:
                 raise ValueError("generated trajectory is empty")
 
@@ -986,7 +1018,7 @@ class RobotGUI(QWidget):
                 {"type": "pose_profile_run", "profile": rows},
             )
             self.status_label.setText(
-                f"Sent+Started JugglePath {name}: {len(rows)} pts"
+                f"Sent+Started {source_kind} {name}: {len(rows)} pts"
             )
         except Exception as e:
             self.status_label.setText(f"JugglePath send failed: {e}")

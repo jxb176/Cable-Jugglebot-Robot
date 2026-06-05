@@ -102,6 +102,8 @@ class ODriveConfig:
     axis_ids: tuple[int, ...]
     mm_per_turn: tuple[float, ...]
     torque_direction: float
+    input_vel_scale: float
+    input_torque_scale: float
 
 
 @dataclass(slots=True, frozen=True)
@@ -422,6 +424,16 @@ def parse_runtime_config(raw: dict) -> RuntimeConfig:
                 torque_direction=_require_float(
                     hardware_odrive_cfg,
                     "torque_direction",
+                    "config.hardware.odrive",
+                ),
+                input_vel_scale=_require_positive_float(
+                    hardware_odrive_cfg,
+                    "input_vel_scale",
+                    "config.hardware.odrive",
+                ),
+                input_torque_scale=_require_positive_float(
+                    hardware_odrive_cfg,
+                    "input_torque_scale",
                     "config.hardware.odrive",
                 ),
             ),

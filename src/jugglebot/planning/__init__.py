@@ -20,6 +20,10 @@ from .profile_loader import (
     load_profile_yaml,
     build_path_from_profile,
 )
+from .pattern_export import (
+    load_pattern_yaml,
+    build_traj_from_pattern,
+)
 
 __all__ = [
     "State3D",
@@ -35,4 +39,6 @@ __all__ = [
     "save_trajectory_plot",
     "load_profile_yaml",
     "build_path_from_profile",
+    "load_pattern_yaml",
+    "build_traj_from_pattern",
 ]

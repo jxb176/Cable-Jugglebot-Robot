@@ -8,7 +8,6 @@ from collections import deque
 
 logger = logging.getLogger("robot")
 
-_FF_SCALE = 1000.0
 _FF_INT16_MIN = -32768
 _FF_INT16_MAX = 32767
 
@@ -39,8 +38,10 @@ class ODriveAxis:
         self.manager._send(self.axis_id, 0x07, int(state).to_bytes(4, "little"))
 
     def set_input_pos(self, pos_turns, vel_turns=0.0, torque=0.0):
-        vel_raw = int(float(vel_turns) * _FF_SCALE)
-        torque_raw = int(float(torque) * _FF_SCALE)
+        vel_scale = float(self.manager.input_vel_scale)
+        torque_scale = float(self.manager.input_torque_scale)
+        vel_raw = int(float(vel_turns) * vel_scale)
+        torque_raw = int(float(torque) * torque_scale)
         vel_clamped = max(_FF_INT16_MIN, min(_FF_INT16_MAX, vel_raw))
         torque_clamped = max(_FF_INT16_MIN, min(_FF_INT16_MAX, torque_raw))
         clamped = (vel_clamped != vel_raw) or (torque_clamped != torque_raw)
@@ -52,8 +53,8 @@ class ODriveAxis:
                 self.axis_id,
                 float(vel_turns),
                 float(torque),
-                float(vel_clamped) / _FF_SCALE,
-                float(torque_clamped) / _FF_SCALE,
+                float(vel_clamped) / vel_scale,
+                float(torque_clamped) / torque_scale,
             )
         self._ff_clamp_active = clamped
         payload = (
@@ -158,9 +159,11 @@ class ODriveAxis:
 
 
 class ODriveCanManager:
-    def __init__(self, canbus="can0"):
+    def __init__(self, canbus="can0", input_vel_scale: float = 1000.0, input_torque_scale: float = 1000.0):
         self.bus = can.interface.Bus(channel=canbus, bustype="socketcan")
         self.axes = {}
+        self.input_vel_scale = float(input_vel_scale)
+        self.input_torque_scale = float(input_torque_scale)
         self._stop = threading.Event()
         self._stats_lock = threading.Lock()
         self._rx_times = deque()

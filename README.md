@@ -9,6 +9,8 @@ The repository now includes a packaged planning library under `jugglebot.plannin
   - `python -m jugglebot.apps.plantraj --profile simple_throw --out-dir .`
 - Generate from a YAML endpoint/segment profile at a defined command rate:
   - `python -m jugglebot.apps.plantraj --profile-file src/jugglebot/profiles/simple_throw.yaml --command-rate-hz 500 --plot --out-dir .`
+- Generate directly from a pattern project YAML by sampling one hand trajectory:
+  - `python -m jugglebot.apps.plantraj --pattern-file src/jugglebot/profiles/one_ball_one_hand.yaml --hand right --command-rate-hz 500 --plot --out-dir .`
 - Output files:
   - `pose_cmd.csv`
   - `pose_cmd_full.csv`

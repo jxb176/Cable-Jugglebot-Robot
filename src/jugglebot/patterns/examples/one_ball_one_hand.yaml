@@ -17,27 +17,30 @@ events:
   - -0.1
   - 0.0
   - 0.0
+  catch_velocity_scale: 0.35
 hands:
   right:
   - id: R1
     time: 0.5
     pos:
+    - 0.001
     - 0.0
-    - 0.0
-    - 0.3
+    - 0.12
+    spline_to_next: quintic
     velocity:
-    - -0.2
+    - -0.301
     - 0.0
-    - 0.0
-    spline_to_next: cubic
+    - -0.811
+    path_speed: 0.865
   - id: R2
     time: 1.25
     pos:
+    - 0.016
     - 0.0
-    - 0.0
-    - -0.3
-    velocity:
-    - 0.4
-    - 0.0
-    - -1.2
+    - -0.202
     spline_to_next: quintic
+    velocity:
+    - 0.298
+    - 0.0
+    - -0.782
+    path_speed: 0.837
