@@ -43,6 +43,77 @@ GLOBAL_AXIS_CONTROLLER_SETTINGS = {
     "vel_ramp_rate": 10.0,
 }
 
+GLOBAL_DEVICE_SETTINGS = {
+    "config.dc_bus_overvoltage_trip_level": 56.0,
+    "config.dc_bus_undervoltage_trip_level": 10.5,
+    "config.dc_max_negative_current": -10.0,
+    "config.dc_max_positive_current": 10.0,
+}
+
+GLOBAL_AXIS_CONFIG_SETTINGS = {
+    "config.commutation_encoder": 13,
+    "config.startup_closed_loop_control": False,
+    "config.startup_encoder_index_search": False,
+    "config.startup_encoder_offset_calibration": False,
+    "config.startup_homing": False,
+    "config.startup_motor_calibration": False,
+}
+
+GLOBAL_AXIS_MOTOR_SETTINGS = {
+    "config.motor.calibration_current": 1.0,
+    "config.motor.current_control_bandwidth": 1000.0,
+    "config.motor.current_hard_max": 16.5,
+    "config.motor.current_soft_max": 5.0,
+    "config.motor.direction": 1.0,
+    "config.motor.motor_type": 0,
+    "config.motor.pole_pairs": 7,
+    "config.motor.resistance_calib_max_voltage": 5.0,
+    "config.motor.torque_constant": 0.08269999921321869,
+}
+
+GLOBAL_AXIS_COMMUTATION_MAPPER_SETTINGS = {
+    "commutation_mapper.config.circular": True,
+    "commutation_mapper.config.circular_output_range": 1.0,
+    "commutation_mapper.config.index_gpio": 7,
+    "commutation_mapper.config.index_offset": 0.0,
+    "commutation_mapper.config.index_offset_valid": False,
+    "commutation_mapper.config.offset_valid": True,
+    "commutation_mapper.config.passive_index_search": False,
+    "commutation_mapper.config.scale": 7.0,
+    "commutation_mapper.config.use_endstop": False,
+    "commutation_mapper.config.use_index_gpio": False,
+}
+
+GLOBAL_AXIS_MOTOR_THERMISTOR_SETTINGS = {
+    "motor.motor_thermistor.config.beta": 3984.0,
+    "motor.motor_thermistor.config.enabled": True,
+    "motor.motor_thermistor.config.gpio_pin": 3,
+    "motor.motor_thermistor.config.r_ref": 10000.0,
+    "motor.motor_thermistor.config.t_ref": 25.0,
+    "motor.motor_thermistor.config.temp_limit_lower": 50.0,
+    "motor.motor_thermistor.config.temp_limit_upper": 70.0,
+}
+
+GLOBAL_INCREMENTAL_ENCODER_SETTINGS = {
+    "cpr": 8192,
+    "enabled": False,
+}
+
+GLOBAL_HALL_ENCODER_SETTINGS = {
+    "enabled": False,
+    "hall_polarity": 0,
+    "ignore_illegal_hall_state": False,
+}
+
+GLOBAL_SPI_ENCODER_SETTINGS = {
+    "baudrate": 1687500,
+    "biss_c_bits": 18,
+    "delay": 0.0,
+    "max_error_rate": 0.004999999888241291,
+    "mode": 0,
+    "ncs_gpio": 17,
+}
+
 HARDCODED_ODRIVES = [
     {
         "name": "odrive_0",
@@ -50,6 +121,9 @@ HARDCODED_ODRIVES = [
         "axis": "axis0",
         "axis_can_overrides": {
             "node_id": 0,
+        },
+        "axis_path_overrides": {
+            "commutation_mapper.config.offset": 1.4126534461975098,
         },
     },
     {
@@ -59,6 +133,9 @@ HARDCODED_ODRIVES = [
         "axis_can_overrides": {
             "node_id": 1,
         },
+        "axis_path_overrides": {
+            "commutation_mapper.config.offset": 1.9309779405593872,
+        },
     },
     {
         "name": "odrive_2",
@@ -66,6 +143,9 @@ HARDCODED_ODRIVES = [
         "axis": "axis0",
         "axis_can_overrides": {
             "node_id": 2,
+        },
+        "axis_path_overrides": {
+            "commutation_mapper.config.offset": -0.8617115616798401,
         },
     },
     {
@@ -75,6 +155,9 @@ HARDCODED_ODRIVES = [
         "axis_can_overrides": {
             "node_id": 3,
         },
+        "axis_path_overrides": {
+            "commutation_mapper.config.offset": 2.7791144847869873,
+        },
     },
     {
         "name": "odrive_4",
@@ -83,6 +166,9 @@ HARDCODED_ODRIVES = [
         "axis_can_overrides": {
             "node_id": 4,
         },
+        "axis_path_overrides": {
+            "commutation_mapper.config.offset": 3.438838005065918,
+        },
     },
     {
         "name": "odrive_5",
@@ -90,6 +176,9 @@ HARDCODED_ODRIVES = [
         "axis": "axis0",
         "axis_can_overrides": {
             "node_id": 5,
+        },
+        "axis_path_overrides": {
+            "commutation_mapper.config.offset": -3.035356283187866,
         },
     },
 ]
@@ -287,14 +376,33 @@ def _resolve_axis_name(args: argparse.Namespace, device_cfg: dict[str, Any]) -> 
 
 def _build_changes(args: argparse.Namespace, device_cfg: dict[str, Any]) -> list[PendingChange]:
     axis = _resolve_axis_name(args, device_cfg)
+    axis_index = int(axis[-1])
 
+    device_values: dict[str, Any] = {}
     can_values: dict[str, int] = {}
     controller_values: dict[str, Any] = {}
+    axis_path_values: dict[str, Any] = {}
+    inc_encoder_values: dict[str, Any] = {}
+    hall_encoder_values: dict[str, Any] = {}
+    spi_encoder_values: dict[str, Any] = {}
     if args.apply_default_can_rates or not args.no_globals:
+        device_values.update(GLOBAL_DEVICE_SETTINGS)
         can_values.update(GLOBAL_AXIS_CAN_SETTINGS)
         controller_values.update(GLOBAL_AXIS_CONTROLLER_SETTINGS)
+        axis_path_values.update(GLOBAL_AXIS_CONFIG_SETTINGS)
+        axis_path_values.update(GLOBAL_AXIS_MOTOR_SETTINGS)
+        axis_path_values.update(GLOBAL_AXIS_COMMUTATION_MAPPER_SETTINGS)
+        axis_path_values.update(GLOBAL_AXIS_MOTOR_THERMISTOR_SETTINGS)
+        inc_encoder_values.update(GLOBAL_INCREMENTAL_ENCODER_SETTINGS)
+        hall_encoder_values.update(GLOBAL_HALL_ENCODER_SETTINGS)
+        spi_encoder_values.update(GLOBAL_SPI_ENCODER_SETTINGS)
     can_values.update({k: int(v) for k, v in (device_cfg.get("axis_can_overrides") or {}).items()})
     controller_values.update(device_cfg.get("axis_controller_overrides") or {})
+    device_values.update(device_cfg.get("device_path_overrides") or {})
+    axis_path_values.update(device_cfg.get("axis_path_overrides") or {})
+    inc_encoder_values.update(device_cfg.get("inc_encoder_overrides") or {})
+    hall_encoder_values.update(device_cfg.get("hall_encoder_overrides") or {})
+    spi_encoder_values.update(device_cfg.get("spi_encoder_overrides") or {})
 
     can_overrides = {
         "bus_voltage_msg_rate_ms": args.bus_voltage_msg_rate_ms,
@@ -331,12 +439,32 @@ def _build_changes(args: argparse.Namespace, device_cfg: dict[str, Any]) -> list
             controller_values[key] = value
 
     changes = [
+        PendingChange(path=path, value=value)
+        for path, value in sorted(device_values.items())
+    ]
+    changes.extend(
         PendingChange(path=f"{axis}.config.can.{name}", value=int(value))
         for name, value in sorted(can_values.items())
-    ]
+    )
     changes.extend(
         PendingChange(path=f"{axis}.controller.config.{name}", value=value)
         for name, value in sorted(controller_values.items())
+    )
+    changes.extend(
+        PendingChange(path=f"{axis}.{path}", value=value)
+        for path, value in sorted(axis_path_values.items())
+    )
+    changes.extend(
+        PendingChange(path=f"inc_encoder{axis_index}.config.{name}", value=value)
+        for name, value in sorted(inc_encoder_values.items())
+    )
+    changes.extend(
+        PendingChange(path=f"hall_encoder{axis_index}.config.{name}", value=value)
+        for name, value in sorted(hall_encoder_values.items())
+    )
+    changes.extend(
+        PendingChange(path=f"spi_encoder{axis_index}.config.{name}", value=value)
+        for name, value in sorted(spi_encoder_values.items())
     )
     return changes
 
@@ -455,7 +583,9 @@ def _print_device_table() -> None:
         serial_dec = _config_serial_int(entry)
         print(
             f"{entry['name']}: serial=0x{serial_hex} ({serial_dec}), "
-            f"axis={entry.get('axis', 'axis0')}, overrides={entry.get('axis_can_overrides', {})}"
+            f"axis={entry.get('axis', 'axis0')}, "
+            f"can_overrides={entry.get('axis_can_overrides', {})}, "
+            f"path_overrides={entry.get('axis_path_overrides', {})}"
         )
 
 
