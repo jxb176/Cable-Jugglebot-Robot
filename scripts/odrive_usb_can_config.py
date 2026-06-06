@@ -69,6 +69,8 @@ GLOBAL_AXIS_MOTOR_SETTINGS = {
     "config.motor.direction": 1.0,
     "config.motor.motor_type": 0,
     "config.motor.pole_pairs": 7,
+    "config.motor.phase_inductance_valid": True,
+    "config.motor.phase_resistance_valid": True,
     "config.motor.resistance_calib_max_voltage": 5.0,
     "config.motor.torque_constant": 0.08269999921321869,
 }
@@ -126,6 +128,8 @@ HARDCODED_ODRIVES = [
         },
         "axis_path_overrides": {
             "commutation_mapper.config.offset": 1.4126534461975098,
+            "config.motor.phase_inductance": 0.0007982808747328818,
+            "config.motor.phase_resistance": 0.6527003049850464,
         },
     },
     {
@@ -137,6 +141,8 @@ HARDCODED_ODRIVES = [
         },
         "axis_path_overrides": {
             "commutation_mapper.config.offset": 1.9309779405593872,
+            "config.motor.phase_inductance": 0.0007938282797113061,
+            "config.motor.phase_resistance": 0.6559245586395264,
         },
     },
     {
@@ -148,6 +154,8 @@ HARDCODED_ODRIVES = [
         },
         "axis_path_overrides": {
             "commutation_mapper.config.offset": -0.8617115616798401,
+            "config.motor.phase_inductance": 0.0007895746966823936,
+            "config.motor.phase_resistance": 0.6262460350990295,
         },
     },
     {
@@ -159,6 +167,8 @@ HARDCODED_ODRIVES = [
         },
         "axis_path_overrides": {
             "commutation_mapper.config.offset": 2.7791144847869873,
+            "config.motor.phase_inductance": 0.0007953792810440063,
+            "config.motor.phase_resistance": 0.6447867751121521,
         },
     },
     {
@@ -170,6 +180,8 @@ HARDCODED_ODRIVES = [
         },
         "axis_path_overrides": {
             "commutation_mapper.config.offset": 3.438838005065918,
+            "config.motor.phase_inductance": 0.0008129335474222898,
+            "config.motor.phase_resistance": 0.66162109375,
         },
     },
     {
@@ -181,6 +193,8 @@ HARDCODED_ODRIVES = [
         },
         "axis_path_overrides": {
             "commutation_mapper.config.offset": -3.035356283187866,
+            "config.motor.phase_inductance": 0.0007876266026869416,
+            "config.motor.phase_resistance": 0.6458514332771301,
         },
     },
 ]
