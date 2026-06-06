@@ -1,0 +1,94 @@
+robot:
+  name: cable_jugglebot_v1
+  control_rate_hz: 200
+  units: SI
+  mode: hardware
+  auto_enable_on_startup: false
+
+geometry:
+  anchor_points: [...]
+  platform_attach_points: [...]
+  capstan_radius_m: 0.01
+
+mass_properties:
+  platform_mass_kg: 0.108
+  platform_inertia_kgm2: [0.000152, 0.000152, 0.000254]
+
+winches:
+  spool_inertia_kgm2: 2.28e-6
+  torque_limit_nm: 1.0
+  damping_nm_per_radps: 0.0
+  direction_sign: [1, 1, -1, 1, -1, 1]
+
+tension:
+  Tmin_N: 5.0
+  Tmax_N: 150.0
+  regularization_lambda: 0.01
+  alpha_blend: 0.5
+
+controller:
+  spool_space:
+    kp: [0.377, 0.377, 0.377, 0.377, 0.377, 0.377]
+    kd: [0.0126, 0.0126, 0.0126, 0.0126, 0.0126, 0.0126]
+    gravity_ff_z_n: 1.2
+    enable_torque_feedforward: false
+    bias_tension_N: [12.0, 12.0, 12.0, 12.0, 12.0, 12.0]
+    torque_limit_nm: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    fallback_tension:
+      kp_n_per_mm: 0.6
+      kd_n_per_mmps: 0.02
+      bias_n: 12.0
+      min_n: 0.0
+      max_n: 150.0
+    outer_taskspace_correction:
+      kp: [1.0, 1.0, 1.0, 1.0, 1.0]
+      kd: [0.0, 0.0, 0.0, 0.0, 0.0]
+      cable_clip_m: [0.10, 0.10, 0.10, 0.10, 0.10, 0.10]
+    nullspace_tension:
+      kp: 0.001
+      ki: 0.0
+      eta_limit_m: 0.02
+      sigma_ref_N: 0.0
+      sigma_rate_limit_Nps: 10.0
+      tmin_N: 5.0
+
+allocation:
+  backend: numpy
+  max_iters: 40
+  wrench_from_tension_sign: -1.0
+
+estimator:
+  rate_hz: 75.0
+  enable_velocity_filter: true
+  vel_filter_cutoff_hz: 30.0
+
+hardware:
+  can:
+    interface: can0
+    bitrate: 1000000
+  odrive:
+    axis_ids: [0, 1, 2, 3, 4, 5]
+    mm_per_turn: [-62.832, -62.832, -62.832, -62.832, -62.832, -62.832]
+    torque_direction: 1.0
+    input_vel_scale: 500.0
+    input_torque_scale: 1000.0
+
+logging:
+  level: INFO
+  log_directory: logs
+  telemetry_udp:
+    enabled: true
+    host: 192.168.1.10
+    port: 5005
+
+rt:
+  status_report_period_s: 1.0
+  deadline_warning_margin_ms: 1.0
+  deadline_warning_missed_per_report: 5
+  feedback_age_warning_ms: 10.0
+  transition_grace_s: 0.5
+
+safety:
+  watchdog_timeout_s: 0.1
+  max_pose_error_m: 0.05
+  max_velocity_mps: 3.0

@@ -23,6 +23,8 @@ The repository now includes a packaged planning library under `jugglebot.plannin
 2. Start the simulation daemon:
    - `python -m jugglebot.apps.simd --viewer --auto-enable`
    - Uses `src/jugglebot/config/sim.yaml` by default
+   - On mixed-GPU Linux workstations, use the helper script:
+   - `scripts/run_sim_viewer.sh`
 3. In a second terminal, upload and play the generated trajectory:
    - `python -m jugglebot.apps.playtraj --csv pose_cmd.csv --auto-enable`
 4. To include trajectory velocity/acceleration feedforward terms in control:
@@ -59,6 +61,8 @@ The repository now includes a packaged planning library under `jugglebot.plannin
   - `python -m jugglebot.apps.controlui --host <robot-host-or-ip> --tcp-port 5555 --udp-port 5556`
 - Example on the same LAN:
   - `python -m jugglebot.apps.controlui --host 192.168.1.42`
+- For the local simulation workflow:
+  - `scripts/run_sim_gui.sh`
 - Environment variable alternatives:
   - `JUGGLEBOT_HOST`, `JUGGLEBOT_TCP_PORT`, `JUGGLEBOT_UDP_PORT`
 
