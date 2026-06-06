@@ -96,6 +96,7 @@ def build_robot_state_snapshot(
     if timing is None and hasattr(state, "get_timing_stats"):
         timing = state.get_timing_stats()
     watchdog = state.get_watchdog_status() if hasattr(state, "get_watchdog_status") else None
+    control_time_s = state.get_control_time_s() if hasattr(state, "get_control_time_s") else None
     axis_mm_per_turn = list(mm_per_turn or MM_PER_TURN)
 
     with state.lock:
@@ -185,6 +186,7 @@ def build_robot_state_snapshot(
     return RobotState(
         timestamp_s=timestamp_s,
         sequence_id=sequence_id,
+        control_time_s=None if control_time_s is None else float(control_time_s),
         control_state=control_state,
         profile_active=profile_active,
         actuators=tuple(actuators),

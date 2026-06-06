@@ -473,5 +473,5 @@ def parse_runtime_config(raw: dict) -> RuntimeConfig:
     )
 
 
-def load_runtime_config(config_name: str = "default.yaml") -> RuntimeConfig:
+def load_runtime_config(config_name: str = "robot.yaml") -> RuntimeConfig:
     return parse_runtime_config(load_raw_config(config_name))

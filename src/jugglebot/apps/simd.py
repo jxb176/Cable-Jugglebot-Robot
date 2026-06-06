@@ -30,8 +30,8 @@ def main():
     parser.add_argument(
         "--config",
         type=str,
-        default="default.yaml",
-        help="Configuration file name in config/ directory"
+        default="sim.yaml",
+        help="Configuration file name in config/ directory (default: sim.yaml)"
     )
     parser.add_argument(
         "--viewer",

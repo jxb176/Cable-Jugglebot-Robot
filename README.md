@@ -22,6 +22,7 @@ The repository now includes a packaged planning library under `jugglebot.plannin
    - `python -m jugglebot.apps.plantraj --profile simple_throw --command-rate-hz 500 --out-dir .`
 2. Start the simulation daemon:
    - `python -m jugglebot.apps.simd --viewer --auto-enable`
+   - Uses `src/jugglebot/config/sim.yaml` by default
 3. In a second terminal, upload and play the generated trajectory:
    - `python -m jugglebot.apps.playtraj --csv pose_cmd.csv --auto-enable`
 4. To include trajectory velocity/acceleration feedforward terms in control:
@@ -49,6 +50,11 @@ The repository now includes a packaged planning library under `jugglebot.plannin
 
 ## Network Control Interface (Prototype)
 
+- Install GUI dependencies:
+  - `pip install -e .[gui]`
+- Runtime configs:
+  - hardware daemon default: `src/jugglebot/config/robot.yaml`
+  - simulation daemon default: `src/jugglebot/config/sim.yaml`
 - Run the prototype control UI as a packaged app:
   - `python -m jugglebot.apps.controlui --host <robot-host-or-ip> --tcp-port 5555 --udp-port 5556`
 - Example on the same LAN:

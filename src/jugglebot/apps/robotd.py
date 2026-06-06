@@ -31,8 +31,8 @@ def main():
     parser.add_argument(
         "--config",
         type=str,
-        default="default.yaml",
-        help="Configuration file name in config/ directory"
+        default="robot.yaml",
+        help="Configuration file name in config/ directory (default: robot.yaml)"
     )
     args = parser.parse_args()
 

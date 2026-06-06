@@ -214,6 +214,7 @@ class BusStats(ModelBase):
 class RobotState(ModelBase):
     timestamp_s: float
     sequence_id: int
+    control_time_s: float | None = None
     control_state: str = "unknown"
     profile_active: bool = False
     actuators: tuple[ActuatorState, ...] = ()

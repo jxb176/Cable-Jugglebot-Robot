@@ -24,6 +24,10 @@ dev = [
     "black",
     "mypy",
 ]
+gui = [
+    "PyQt6>=6.6",
+    "pyqtgraph>=0.13",
+]
 sim = [
     "mujoco",
     "matplotlib",
