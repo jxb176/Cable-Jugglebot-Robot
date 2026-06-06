@@ -31,6 +31,7 @@ GLOBAL_AXIS_CAN_SETTINGS = {
 }
 
 GLOBAL_AXIS_CONTROLLER_SETTINGS = {
+    "circular_setpoints": False,
     "input_filter_bandwidth": 150.0,
     "input_mode": 3,
     "pos_gain": 50.0,
@@ -52,6 +53,7 @@ GLOBAL_DEVICE_SETTINGS = {
 
 GLOBAL_AXIS_CONFIG_SETTINGS = {
     "config.commutation_encoder": 13,
+    "config.load_encoder": 13,
     "config.startup_closed_loop_control": False,
     "config.startup_encoder_index_search": False,
     "config.startup_encoder_offset_calibration": False,
@@ -82,6 +84,7 @@ GLOBAL_AXIS_COMMUTATION_MAPPER_SETTINGS = {
     "commutation_mapper.config.scale": 7.0,
     "commutation_mapper.config.use_endstop": False,
     "commutation_mapper.config.use_index_gpio": False,
+    "pos_vel_mapper.config.offset_valid": False,
 }
 
 GLOBAL_AXIS_MOTOR_THERMISTOR_SETTINGS = {
