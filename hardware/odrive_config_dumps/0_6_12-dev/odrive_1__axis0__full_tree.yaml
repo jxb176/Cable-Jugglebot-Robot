@@ -1,0 +1,761 @@
+_metadata:
+  device_name: odrive_1
+  serial_number_text: '59881294738482'
+  serial_number_hex: '0x3676334d3432'
+  configured_serial_hex: '0x3676334d3432'
+  configured_serial_int: 59881294738482
+  axis: axis0
+  firmware:
+    major: 0
+    minor: 6
+    revision: 12
+    unreleased: 1
+    commit_hash: 943244299
+  dumped_at_utc: '2026-06-06T16:35:06Z'
+_roots:
+- odrv
+- odrv.axis0
+_errors: []
+config:
+  odrv:
+    axis0:
+      active_errors: 513
+      commutation_mapper:
+        config:
+          approx_init_pos: 0.0
+          approx_init_pos_valid: false
+          circular: true
+          circular_output_range: 1.0
+          index_gpio: 7
+          index_offset: 0.0
+          index_offset_valid: false
+          offset: 1.9309779405593872
+          offset_valid: true
+          passive_index_search: false
+          scale: 7.0
+          use_endstop: false
+          use_index_gpio: false
+        n_index_events: 0
+        pos_abs: 0.6614589691162109
+        pos_rel: 0.0008668899536132812
+        status: 0
+        vel: 0.05606060475111008
+        working_offset: 6.660592079162598
+      config:
+        I_bus_hard_max: inf
+        I_bus_hard_min: -inf
+        I_bus_soft_max: inf
+        I_bus_soft_min: -inf
+        P_bus_soft_max: inf
+        P_bus_soft_min: -inf
+        anticogging:
+          calib_bidirectional: true
+          calib_coarse_integrator_gain: 10.0
+          calib_coarse_tuning_duration: 60.0
+          calib_end_vel: 0.15000000596046448
+          calib_fine_dist_scale: 1.0
+          calib_fine_tuning_duration: 120.0
+          calib_start_vel: 1.0
+          enabled: false
+          max_torque: 0.15000000596046448
+        calib_range: 0.019999999552965164
+        calib_scan_distance: 8.0
+        calib_scan_vel: 2.0
+        calibration_lockin:
+          accel: 3.183098793029785
+          current: 10.0
+          ramp_distance: 0.5
+          ramp_time: 0.4000000059604645
+          vel: 6.36619758605957
+        can:
+          bus_voltage_msg_rate_ms: 1000
+          encoder_msg_rate_ms: 4
+          error_msg_rate_ms: 250
+          heartbeat_msg_rate_ms: 250
+          input_torque_scale: 1000
+          input_vel_scale: 500
+          iq_msg_rate_ms: 100
+          node_id: 1
+          powers_msg_rate_ms: 0
+          temperature_msg_rate_ms: 1000
+          torques_msg_rate_ms: 4
+          version_msg_rate_ms: 0
+        commutation_encoder: 13
+        commutation_encoder_bandwidth: nan
+        dir_gpio_pin: 9
+        enable_error_gpio: false
+        enable_step_dir: false
+        enable_watchdog: false
+        encoder_bandwidth: 1000.0
+        error_gpio_pin: 10
+        general_lockin:
+          accel: 20.0
+          current: 10.0
+          finish_distance: 100.0
+          finish_on_distance: false
+          finish_on_vel: false
+          initial_pos: 0.0
+          ramp_distance: 3.1415927410125732
+          ramp_time: 0.4000000059604645
+          vel: 40.0
+        harmonic_compensation:
+          calib_settling_delay: 2.0
+          calib_turns: 8
+          calib_vel: 8.0
+          cos2x_coef: 0.0
+          cosx_coef: 0.0
+          sin2x_coef: 0.0
+          sinx_coef: 0.0
+        harmonic_compensation_commutation:
+          calib_settling_delay: 2.0
+          calib_turns: 8
+          calib_vel: 8.0
+          cos2x_coef: 0.0
+          cosx_coef: 0.0
+          sin2x_coef: 0.0
+          sinx_coef: 0.0
+        index_search_at_target_vel_only: false
+        init_pos: nan
+        init_torque: 0.0
+        init_vel: 0.0
+        load_encoder: 1
+        motor:
+          acim_autoflux_attack_gain: 10.0
+          acim_autoflux_decay_gain: 1.0
+          acim_autoflux_enable: false
+          acim_autoflux_min_Id: 10.0
+          acim_gain_min_flux: 10.0
+          acim_nominal_slip_vel: 2.3399999141693115
+          bEMF_FF_enable: false
+          calibration_current: 1.0
+          current_control_bandwidth: 1000.0
+          current_hard_max: 16.5
+          current_slew_rate_limit: 10000.0
+          current_soft_max: 5.0
+          dI_dt_FF_enable: false
+          direction: 1.0
+          ff_pm_flux_linkage: 0.0
+          ff_pm_flux_linkage_valid: false
+          fw_enable: false
+          fw_fb_bandwidth: 500.0
+          fw_mod_setpoint: 0.7786434292793274
+          motor_model_l_d: 0.0
+          motor_model_l_dq_valid: false
+          motor_model_l_q: 0.0
+          motor_type: 0
+          phase_inductance: 0.0
+          phase_inductance_valid: false
+          phase_resistance: 0.0
+          phase_resistance_valid: false
+          pole_pairs: 7
+          power_torque_report_filter_bandwidth: 8000.0
+          resistance_calib_max_voltage: 5.0
+          sensorless_observer_gain: 1000.0
+          sensorless_pll_bandwidth: 1000.0
+          sensorless_pm_flux_linkage: 0.0
+          sensorless_pm_flux_linkage_valid: false
+          torque_constant: 0.08269999921321869
+          wL_FF_enable: false
+        off_axis_k: 1.0
+        off_axis_k_commutation: 1.0
+        sensorless_ramp:
+          accel: 31.83098793029785
+          current: 10.0
+          finish_distance: 15.915493965148926
+          finish_on_distance: false
+          finish_on_vel: true
+          initial_pos: 0.0
+          ramp_distance: 0.5
+          ramp_time: 0.4000000059604645
+          vel: 63.6619758605957
+        startup_closed_loop_control: false
+        startup_encoder_index_search: false
+        startup_encoder_offset_calibration: false
+        startup_homing: false
+        startup_max_wait_for_ready: 3.0
+        startup_motor_calibration: false
+        step_dir_always_on: false
+        step_gpio_pin: 8
+        torque_soft_max: inf
+        torque_soft_min: -inf
+        use_init_vel_for_sensorless: false
+        watchdog_timeout: 0.0
+      controller:
+        autotuning:
+          frequency: 0.0
+          pos_amplitude: 0.0
+          torque_amplitude: 0.0
+          vel_amplitude: 0.0
+          vel_burst_factor: 0
+        autotuning_phase: 0.0
+        config:
+          absolute_setpoints: false
+          circular_setpoint_range: 1.0
+          circular_setpoints: false
+          commutation_vel_scale: 1.0
+          control_mode: 3
+          enable_gain_scheduling: false
+          enable_overspeed_error: true
+          enable_torque_mode_vel_limit: true
+          enable_vel_limit: true
+          gain_scheduling_min_ratio: 0.0
+          gain_scheduling_width: 0.0010000000474974513
+          homing_speed: 0.25
+          inertia: 0.0
+          input_filter_bandwidth: 150.0
+          input_mode: 3
+          pos_gain: 50.0
+          spinout_electrical_power_bandwidth: 20.0
+          spinout_electrical_power_threshold: 10.0
+          spinout_mechanical_power_bandwidth: 20.0
+          spinout_mechanical_power_threshold: -10.0
+          steps_per_circular_range: 1024
+          torque_ramp_rate: 0.009999999776482582
+          use_commutation_vel: false
+          use_load_encoder_for_commutation_vel: false
+          vel_gain: 0.009999999776482582
+          vel_integrator_decay_gain: 0.9900000095367432
+          vel_integrator_gain: 0.0
+          vel_integrator_limit: inf
+          vel_limit: 60.0
+          vel_limit_tolerance: 1.6670000553131104
+          vel_ramp_rate: 10.0
+        effective_torque_setpoint: 0.0
+        input_pos: 0.0
+        input_torque: 0.0
+        input_vel: 0.0
+        pos_setpoint: 0.0
+        spinout_electrical_power: 0.0
+        spinout_mechanical_power: 0.0
+        torque_setpoint: 0.0
+        trajectory_done: true
+        vel_integrator_torque: 0.0
+        vel_setpoint: 0.0
+      current_state: 1
+      detailed_disarm_reason: 0
+      disarm_reason: 0
+      disarm_time: 0.0
+      enable_pin:
+        config:
+          debounce_ms: 50
+          enabled: false
+          gpio_num: 11
+          is_active_high: false
+          offset: 0.0
+        state: false
+      interpolator:
+        config:
+          dynamic: true
+        interpolation: 0.0
+        status: 8
+      is_armed: false
+      is_homed: false
+      last_drv_fault: 0
+      max_endstop:
+        config:
+          debounce_ms: 50
+          enabled: false
+          gpio_num: 0
+          is_active_high: false
+          offset: 0.0
+        state: false
+      mechanical_brake:
+        config:
+          gpio_num: 0
+          is_active_low: true
+      min_endstop:
+        config:
+          debounce_ms: 50
+          enabled: false
+          gpio_num: 0
+          is_active_high: false
+          offset: 0.0
+        state: false
+      motor:
+        acim_estimator:
+          phase_offset: 0.0
+          rotor_flux: 0.0
+          slip_vel: 0.0
+          stator_phase: 0.0008668899536132812
+          stator_phase_vel: -0.1380045861005783
+        alpha_beta_controller:
+          I_bus: 0.0
+          I_measured_norm_sqr: 0.0
+          Ialpha_measured: 0.0
+          Ibeta_measured: 0.0
+          current_meas_phA: nan
+          current_meas_phB: nan
+          current_meas_phC: nan
+          current_meas_status_phA: 1
+          current_meas_status_phB: 1
+          current_meas_status_phC: 1
+          max_measurable_current: 60.75
+          n_evt_current_measurement: 1606032
+          n_evt_pwm_update: 0
+          power: 0.0
+        dc_calib:
+          a_0: 8191.5
+          a_1: 8191.5
+          a_2: 8191.5
+          b_0: 8191.5
+          b_1: 8191.5
+          b_2: 8191.5
+          c_0: 8191.5
+          c_1: 8191.5
+          c_2: 8191.5
+        effective_current_lim: 5.0
+        electrical_power: 0.0
+        fet_thermistor:
+          temperature: 27.122955322265625
+        foc:
+          I_measured_report_filter_k: 1.0
+          Id_measured: 0.0
+          Id_setpoint: 0.0
+          Ierr_d: 0.0
+          Ierr_magn_sqr: 0.0
+          Ierr_q: 0.0
+          Iq_measured: 0.0
+          Iq_setpoint: 0.0
+          Vd_setpoint: 0.0
+          Vq_setpoint: 0.0
+          final_v_alpha: 0.0
+          final_v_beta: 0.0
+          i_gain: 0.0
+          mod_d: 0.0
+          mod_magn_sqr: 0.0
+          mod_q: 0.0
+          p_gain: 0.0
+          phase: 0.6614589691162109
+          phase_vel: 0.4048670530319214
+          v_current_control_integral_d: 0.0
+          v_current_control_integral_q: 0.0
+        input_id: 0.0
+        input_iq: 0.0
+        loss_power: 0.0
+        mechanical_power: 0.0
+        motor_thermistor:
+          config:
+            a: 3.9082999229431152
+            b: -0.0005774999735876918
+            beta: 3984.0
+            enabled: true
+            gpio_pin: 3
+            ignore_disconnected: false
+            mode: 1
+            r_ref: 10000.0
+            t_ref: 25.0
+            temp_limit_lower: 50.0
+            temp_limit_upper: 70.0
+          temperature: 22.885009765625
+        resistance_calibration_I_beta: 0.0
+        sensorless_estimator:
+          phase: 0.0
+          phase_vel: 0.0
+          pll_pos: 0.0
+        torque_estimate: 0.0
+      observed_encoder_scale_factor: nan
+      pos_estimate: nan
+      pos_vel_mapper:
+        config:
+          approx_init_pos: 0.0
+          approx_init_pos_valid: false
+          circular: false
+          circular_output_range: 1.0
+          index_gpio: 7
+          index_offset: 0.0
+          index_offset_valid: false
+          offset: 0.0
+          offset_valid: false
+          passive_index_search: false
+          scale: 1.0
+          use_endstop: false
+          use_index_gpio: false
+        n_index_events: 0
+        pos_abs: nan
+        pos_rel: 0.0
+        status: 8
+        vel: 0.0
+        working_offset: 0.0
+      procedure_result: 0
+      requested_state: 0
+      step_dir_active: false
+      steps: 0
+      task_times:
+        acim_estimator_update:
+          end_time: 0
+          length: 0
+          max_length: 474
+          start_time: 0
+        can_heartbeat:
+          end_time: 0
+          length: 0
+          max_length: 0
+          start_time: 0
+        controller_update:
+          end_time: 0
+          length: 0
+          max_length: 864
+          start_time: 0
+        current_controller_update:
+          end_time: 0
+          length: 0
+          max_length: 242
+          start_time: 0
+        current_sense:
+          end_time: 0
+          length: 0
+          max_length: 0
+          start_time: 0
+        endstop_update:
+          end_time: 0
+          length: 0
+          max_length: 296
+          start_time: 0
+        motor_update:
+          end_time: 0
+          length: 0
+          max_length: 430
+          start_time: 0
+        open_loop_vector_generator_update:
+          end_time: 0
+          length: 0
+          max_length: 184
+          start_time: 0
+        pwm_update:
+          end_time: 0
+          length: 0
+          max_length: 0
+          start_time: 0
+        sensorless_estimator_update:
+          end_time: 0
+          length: 0
+          max_length: 656
+          start_time: 0
+        thermistor_update:
+          end_time: 0
+          length: 0
+          max_length: 480
+          start_time: 0
+      total_charge_used: 0.0
+      total_power_used: 0.0
+      trap_traj:
+        config:
+          accel_limit: 0.5
+          decel_limit: 0.5
+          vel_limit: 2.0
+      vel_estimate: 0.0
+    bootloader_version: 16777216
+    can:
+      config:
+        baud_rate: 0
+        data_baud_rate: 10000000
+        protocol: 1
+        tx_brs: 0
+      effective_baudrate: 1000000
+      error: 0
+      n_restarts: 0
+      n_rx: 0
+    commit_hash: 943244299
+    config:
+      dc_bus_overvoltage_trip_level: 56.0
+      dc_bus_undervoltage_trip_level: 10.5
+      dc_max_negative_current: -10.0
+      dc_max_positive_current: 10.0
+      enable_uart_a: false
+      gpio0_mode: 17
+      gpio10_mode: 17
+      gpio11_mode: 17
+      gpio12_mode: 17
+      gpio13_mode: 17
+      gpio14_mode: 17
+      gpio15_analog_mapping:
+        deadband_enable: false
+        deadband_end: 1.0
+        deadband_level: 0.0
+        deadband_start: 0.0
+        max: 0.0
+        min: 0.0
+      gpio15_mode: 17
+      gpio16_analog_mapping:
+        deadband_enable: false
+        deadband_end: 1.0
+        deadband_level: 0.0
+        deadband_start: 0.0
+        max: 0.0
+        min: 0.0
+      gpio16_mode: 17
+      gpio17_mode: 17
+      gpio18_mode: 17
+      gpio1_mode: 17
+      gpio2_mode: 17
+      gpio3_mode: 17
+      gpio4_mode: 17
+      gpio5_mode: 17
+      gpio6_mode: 17
+      gpio7_mode: 17
+      gpio8_mode: 17
+      gpio8_pwm_mapping:
+        deadband_enable: false
+        deadband_end: 1.0
+        deadband_level: 0.0
+        deadband_start: 0.0
+        max: 0.0
+        min: 0.0
+      gpio9_mode: 17
+      gpio9_pwm_mapping:
+        deadband_enable: false
+        deadband_end: 1.0
+        deadband_level: 0.0
+        deadband_start: 0.0
+        max: 0.0
+        min: 0.0
+      inverter0:
+        current_hard_max: 150.0
+        current_soft_max: 100.0
+        current_soft_max_derated: 100.0
+        derating_start: inf
+        drv_config: 9029553772700800
+        mod_magn_max: 0.8651593923568726
+        shunt_conductance: 1999.9998779296875
+        temp_limit_lower: 83.95999908447266
+        temp_limit_upper: 103.11000061035156
+      led_brightness: 255
+      max_regen_current: 0.0
+      motor_fan:
+        enabled: false
+        lower: 70.0
+        upper: 80.0
+      odrv_fan:
+        enabled: false
+        lower: 70.0
+        upper: 80.0
+      uart0_protocol: 3
+      uart_a_baudrate: 115200
+      usb_cdc_protocol: 3
+      user_config_0: 0
+      user_config_1: 0
+      user_config_2: 0
+      user_config_3: 0
+      user_config_4: 0
+      user_config_5: 0
+      user_config_6: 0
+      user_config_7: 0
+    control_loop_hz: 8000
+    debug:
+      adc_slot_0_raw: 984092603
+      adc_slot_10_raw: 0
+      adc_slot_1_raw: 527642
+      adc_slot_2_raw: 528741
+      adc_slot_3_raw: 984219796
+      adc_slot_4_raw: 32833558
+      factory_data_loaded: false
+      hal_ticks: 201129
+      mcu_temperature: nan
+      res_calib_commanded_mod: 0.0
+      res_calib_fet_temp: 0.0
+      res_calib_fet_temp_raw: 0.0
+      res_calib_vbus_voltage: 0.0
+      vref: nan
+    encoder_estimator0:
+      pos_estimate: 0.6757534146308899
+      status: 0
+      vel_estimate: 0.051847878843545914
+    encoder_estimator1:
+      pos_estimate: 0.0
+      status: 0
+      vel_estimate: 0.0
+    fw_version_major: 0
+    fw_version_minor: 6
+    fw_version_revision: 12
+    fw_version_unreleased: 1
+    hall_encoder0:
+      abs_pos_max: 0.0
+      abs_pos_min: 0.0
+      config:
+        edge0: nan
+        edge1: nan
+        edge2: nan
+        edge3: nan
+        edge4: nan
+        edge5: nan
+        edges_calibrated: false
+        enabled: false
+        hall_polarity: 0
+        hall_polarity_calibrated: false
+        ignore_illegal_hall_state: false
+      hall_cnt: 255
+      raw_hall_state: 0
+      status: 14
+    hall_encoder1:
+      abs_pos_max: 0.0
+      abs_pos_min: -1.0000016689300537
+      config:
+        edge0: 0.0
+        edge1: 0.0
+        edge2: 0.0
+        edge3: 0.0
+        edge4: 0.0
+        edge5: 0.0
+        edges_calibrated: false
+        enabled: false
+        hall_polarity: 0
+        hall_polarity_calibrated: false
+        ignore_illegal_hall_state: false
+      hall_cnt: 255
+      raw_hall_state: 0
+      status: 125
+    hw_version_major: 4
+    hw_version_minor: 4
+    hw_version_revision: 0
+    hw_version_variant: 58
+    ibus: 0.0
+    ibus_report_filter_k: 1.0
+    identify: false
+    inc_encoder0:
+      config:
+        cpr: 8192
+        enabled: false
+        filter: 0
+      pos_max: 0.0
+      pos_min: 0.0
+      pos_residual: 0.0
+      raw: 0
+      raw_wrapped: 0
+      status: 0
+    inc_encoder1:
+      config:
+        cpr: 8192
+        enabled: false
+        filter: 0
+      pos_max: 0.0
+      pos_min: 0.0
+      pos_residual: 0.0
+      raw: 0
+      raw_wrapped: 0
+      status: 0
+    issues:
+      length: 0
+    misconfigured: false
+    n_evt_control_loop: 1605228
+    n_evt_sampling: 1605230
+    onboard_encoder0:
+      config:
+        field_check_mode: 0
+      field_status: 0
+      raw: 0.67578125
+      status: 0
+    oscilloscope:
+      pos: 0
+      recording: false
+      rollover: false
+      size: 65536
+      trigger_pos: 0
+      triggered_at: 0
+    reboot_required: false
+    rs485_encoder_group0:
+      config:
+        max_error_rate: 0.004999999888241291
+        mode: 0
+      raw: 0.0
+      raw32: 0
+      status: 10
+    rs485_encoder_group1:
+      config:
+        max_error_rate: 0.004999999888241291
+        mode: 0
+      raw: 0.0
+      raw32: 0
+      status: 10
+    serial_number: 59881294738482
+    spi_encoder0:
+      config:
+        baudrate: 1687500
+        delay: 0.0
+        ignore_error_flag: false
+        max_error_rate: 0.004999999888241291
+        mode: 0
+        multiturn_bits: 0
+        ncs_gpio: 17
+        singleturn_bits: 18
+      inject_errors: false
+      multiturn_raw: 0
+      n_errors: 0
+      raw: 0.0
+      status: 14
+      warning: false
+    spi_encoder1:
+      config:
+        baudrate: 1687500
+        delay: 0.0
+        ignore_error_flag: false
+        max_error_rate: 0.004999999888241291
+        mode: 0
+        multiturn_bits: 0
+        ncs_gpio: 17
+        singleturn_bits: 18
+      inject_errors: false
+      multiturn_raw: 0
+      n_errors: 0
+      raw: 0.0
+      status: 14
+      warning: false
+    system_stats:
+      i2c:
+        addr: 0
+        addr_match_cnt: 0
+        error_cnt: 0
+        rx_cnt: 0
+      max_stack_usage_axis: 580
+      max_stack_usage_comms: 588
+      max_stack_usage_startup: 348
+      max_stack_usage_uart: 3908
+      min_heap_space: 56240
+      prio_axis: 3
+      prio_comms: 0
+      prio_startup: 0
+      prio_uart: -3
+      stack_size_axis: 2048
+      stack_size_comms: 4096
+      stack_size_startup: 2048
+      stack_size_uart: 4096
+      uptime: 201169
+      usb:
+        rx_cnt: 0
+        tx_cnt: 0
+        tx_overrun_cnt: 0
+    task_timers_armed: false
+    task_times:
+      control_loop_checks:
+        end_time: 0
+        length: 0
+        max_length: 712
+        start_time: 0
+      control_loop_misc:
+        end_time: 0
+        length: 0
+        max_length: 358
+        start_time: 0
+      current_sense_wait:
+        end_time: 0
+        length: 0
+        max_length: 3142
+        start_time: 0
+      dc_calib_wait:
+        end_time: 0
+        length: 0
+        max_length: 14654
+        start_time: 0
+      encoder_update:
+        end_time: 0
+        length: 0
+        max_length: 2392
+        start_time: 0
+      sampling:
+        end_time: 0
+        length: 0
+        max_length: 262
+        start_time: 0
+    test_property: 0
+    thermistor0: 27.12298583984375
+    user_config_loaded: 6277
+    vbus_voltage: 0.05045779421925545
