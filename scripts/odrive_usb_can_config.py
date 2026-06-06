@@ -449,9 +449,16 @@ def _build_changes(args: argparse.Namespace, device_cfg: dict[str, Any]) -> list
         PendingChange(path=f"{axis}.controller.config.{name}", value=value)
         for name, value in sorted(controller_values.items())
     )
+    axis_non_mapper_paths = {
+        path: value for path, value in axis_path_values.items() if not path.startswith("commutation_mapper.")
+    }
+    axis_mapper_paths = {
+        path: value for path, value in axis_path_values.items() if path.startswith("commutation_mapper.")
+    }
+
     changes.extend(
         PendingChange(path=f"{axis}.{path}", value=value)
-        for path, value in sorted(axis_path_values.items())
+        for path, value in sorted(axis_non_mapper_paths.items())
     )
     changes.extend(
         PendingChange(path=f"inc_encoder{axis_index}.config.{name}", value=value)
@@ -464,6 +471,10 @@ def _build_changes(args: argparse.Namespace, device_cfg: dict[str, Any]) -> list
     changes.extend(
         PendingChange(path=f"spi_encoder{axis_index}.config.{name}", value=value)
         for name, value in sorted(spi_encoder_values.items())
+    )
+    changes.extend(
+        PendingChange(path=f"{axis}.{path}", value=value)
+        for path, value in sorted(axis_mapper_paths.items())
     )
     return changes
 
