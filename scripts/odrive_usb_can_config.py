@@ -526,6 +526,53 @@ def _save_configuration(device: Any) -> None:
     save()
 
 
+def _verify_persisted_changes(device: Any, changes: list[PendingChange]) -> None:
+    for change in changes:
+        actual = _read_value(device, change.path)
+        if not _values_match(actual, change.value):
+            raise RuntimeError(
+                f"Persistent verification failed for {change.path}: expected {change.value}, got {actual}"
+            )
+
+
+def _reconnect_and_verify(
+    expected_serial: str,
+    changes: list[PendingChange],
+    reconnect_timeout_s: float,
+    probe_timeout_s: float,
+) -> None:
+    deadline = time.monotonic() + reconnect_timeout_s
+    last_error: Exception | None = None
+
+    # Give the device a moment to drop and restart before we begin polling.
+    time.sleep(1.0)
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+
+        device = None
+        try:
+            device = _connect_odrive(expected_serial, min(probe_timeout_s, remaining))
+            _verify_persisted_changes(device, changes)
+            return
+        except Exception as exc:
+            last_error = exc
+            time.sleep(0.5)
+        finally:
+            if device is not None:
+                _disconnect_odrive(device)
+
+    if last_error is not None:
+        raise RuntimeError(
+            f"ODrive did not reconnect with persisted settings within {reconnect_timeout_s:.1f}s: {last_error}"
+        ) from last_error
+    raise RuntimeError(
+        f"ODrive did not reconnect with persisted settings within {reconnect_timeout_s:.1f}s"
+    )
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -539,6 +586,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         type=float,
         default=1.0,
         help="USB discovery timeout in seconds",
+    )
+    parser.add_argument(
+        "--reconnect-timeout-s",
+        type=float,
+        default=20.0,
+        help="Maximum time to wait for the ODrive to reconnect after save_configuration()",
     )
     parser.add_argument(
         "--apply-default-can-rates",
@@ -649,13 +702,33 @@ def _configure_one_device(args: argparse.Namespace, device_cfg: dict[str, Any]) 
         print(f"[{device_cfg['name']}] Verified updated parameters in RAM.")
         if not args.no_save:
             print(f"[{device_cfg['name']}] Saving configuration...")
+            save_error = None
             try:
                 _save_configuration(device)
                 print(f"[{device_cfg['name']}] Configuration saved.")
             except Exception as exc:
-                # ODrive may drop the USB connection or reboot during save.
+                # ODrive often drops the USB transport while rebooting after save.
+                save_error = exc
                 print(f"[{device_cfg['name']}] save_configuration() returned with exception: {exc}")
-                print(f"[{device_cfg['name']}] If the device rebooted, reconnect and verify the saved values.")
+
+            _disconnect_odrive(device)
+            device = None
+
+            print(
+                f"[{device_cfg['name']}] Waiting for reconnect and verifying persisted settings..."
+            )
+            _reconnect_and_verify(
+                expected_serial=expected_serial,
+                changes=changes,
+                reconnect_timeout_s=args.reconnect_timeout_s,
+                probe_timeout_s=args.timeout_s,
+            )
+            if save_error is not None:
+                print(
+                    f"[{device_cfg['name']}] Reconnected after save-time transport drop and verified persisted settings."
+                )
+            else:
+                print(f"[{device_cfg['name']}] Persisted settings verified after reconnect.")
         else:
             print(f"[{device_cfg['name']}] Skipped save_configuration() due to --no-save.")
     finally:
