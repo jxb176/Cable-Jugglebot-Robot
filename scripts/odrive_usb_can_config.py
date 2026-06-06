@@ -107,7 +107,6 @@ GLOBAL_HALL_ENCODER_SETTINGS = {
 
 GLOBAL_SPI_ENCODER_SETTINGS = {
     "baudrate": 1687500,
-    "biss_c_bits": 18,
     "delay": 0.0,
     "max_error_rate": 0.004999999888241291,
     "mode": 0,
