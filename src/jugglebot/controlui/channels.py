@@ -45,6 +45,10 @@ class PlotDefinition:
     title: str
     y_label: str
     unit: str
+    domain: str = "general"
+    pose_row: str | None = None
+    pose_column: str | None = None
+    sort_order: int = 0
 
 
 PlotRegistry = OrderedDict[str, PlotDefinition]
@@ -212,30 +216,214 @@ def build_default_channel_registry() -> ChannelRegistry:
             extractor=lambda frame, idx=index: frame.hand_est_pose[idx],
         )
 
+    pose_velocity_translation = (
+        ("x", 0, (255, 80, 80)),
+        ("y", 1, (80, 200, 120)),
+        ("z", 2, (80, 160, 255)),
+    )
+    for name, index, color in pose_velocity_translation:
+        axis_name = name.upper()
+        channels[f"pose.cmd_vel_mmps.{name}"] = ChannelDefinition(
+            key=f"pose.cmd_vel_mmps.{name}",
+            label=f"{axis_name} cmd vel",
+            plot_id="pose_velocity_translation",
+            group="pose_velocity",
+            unit="mm/s",
+            color=color,
+            style=STYLE_SOLID,
+            extractor=lambda frame, idx=index: frame.hand_cmd_vel[idx],
+            default_visible=False,
+        )
+        channels[f"pose.rsp_vel_mmps.{name}"] = ChannelDefinition(
+            key=f"pose.rsp_vel_mmps.{name}",
+            label=f"{axis_name} rsp vel",
+            plot_id="pose_velocity_translation",
+            group="pose_velocity",
+            unit="mm/s",
+            color=color,
+            style=STYLE_DASH,
+            extractor=lambda frame, idx=index: frame.hand_est_vel[idx],
+            default_visible=False,
+        )
+
+    pose_velocity_rotation = (
+        ("roll", 3, (255, 200, 80)),
+        ("pitch", 4, (190, 120, 255)),
+    )
+    for name, index, color in pose_velocity_rotation:
+        axis_name = name.capitalize()
+        channels[f"pose.cmd_vel_degps.{name}"] = ChannelDefinition(
+            key=f"pose.cmd_vel_degps.{name}",
+            label=f"{axis_name} cmd vel",
+            plot_id="pose_velocity_rotation",
+            group="pose_velocity",
+            unit="deg/s",
+            color=color,
+            style=STYLE_SOLID,
+            extractor=lambda frame, idx=index: frame.hand_cmd_vel[idx],
+            default_visible=False,
+        )
+        channels[f"pose.rsp_vel_degps.{name}"] = ChannelDefinition(
+            key=f"pose.rsp_vel_degps.{name}",
+            label=f"{axis_name} rsp vel",
+            plot_id="pose_velocity_rotation",
+            group="pose_velocity",
+            unit="deg/s",
+            color=color,
+            style=STYLE_DASH,
+            extractor=lambda frame, idx=index: frame.hand_est_vel[idx],
+            default_visible=False,
+        )
+
+    pose_accel_translation = (
+        ("x", 0, (255, 80, 80)),
+        ("y", 1, (80, 200, 120)),
+        ("z", 2, (80, 160, 255)),
+    )
+    for name, index, color in pose_accel_translation:
+        axis_name = name.upper()
+        channels[f"pose.cmd_acc_mmps2.{name}"] = ChannelDefinition(
+            key=f"pose.cmd_acc_mmps2.{name}",
+            label=f"{axis_name} cmd acc",
+            plot_id="pose_acceleration_translation",
+            group="pose_acceleration",
+            unit="mm/s^2",
+            color=color,
+            style=STYLE_SOLID,
+            extractor=lambda frame, idx=index: frame.hand_cmd_acc[idx],
+            default_visible=False,
+        )
+        channels[f"pose.rsp_acc_mmps2.{name}"] = ChannelDefinition(
+            key=f"pose.rsp_acc_mmps2.{name}",
+            label=f"{axis_name} rsp acc",
+            plot_id="pose_acceleration_translation",
+            group="pose_acceleration",
+            unit="mm/s^2",
+            color=color,
+            style=STYLE_DASH,
+            extractor=lambda frame, idx=index: frame.hand_est_acc[idx],
+            default_visible=False,
+        )
+
+    pose_accel_rotation = (
+        ("roll", 3, (255, 200, 80)),
+        ("pitch", 4, (190, 120, 255)),
+    )
+    for name, index, color in pose_accel_rotation:
+        axis_name = name.capitalize()
+        channels[f"pose.cmd_acc_degps2.{name}"] = ChannelDefinition(
+            key=f"pose.cmd_acc_degps2.{name}",
+            label=f"{axis_name} cmd acc",
+            plot_id="pose_acceleration_rotation",
+            group="pose_acceleration",
+            unit="deg/s^2",
+            color=color,
+            style=STYLE_SOLID,
+            extractor=lambda frame, idx=index: frame.hand_cmd_acc[idx],
+            default_visible=False,
+        )
+        channels[f"pose.rsp_acc_degps2.{name}"] = ChannelDefinition(
+            key=f"pose.rsp_acc_degps2.{name}",
+            label=f"{axis_name} rsp acc",
+            plot_id="pose_acceleration_rotation",
+            group="pose_acceleration",
+            unit="deg/s^2",
+            color=color,
+            style=STYLE_DASH,
+            extractor=lambda frame, idx=index: frame.hand_est_acc[idx],
+            default_visible=False,
+        )
+
     return channels
 
 
 def build_default_plot_registry() -> PlotRegistry:
     plots: PlotRegistry = OrderedDict()
-    plots["pose_translation"] = PlotDefinition("pose_translation", "Hand Position", "Position", "mm")
-    plots["pose_rotation"] = PlotDefinition("pose_rotation", "Hand Rotation", "Rotation", "deg")
-    plots["position"] = PlotDefinition("position", "Cable Position", "Position", "mm")
-    plots["velocity"] = PlotDefinition("velocity", "Cable Velocity", "Velocity", "mm/s")
-    plots["tension"] = PlotDefinition("tension", "Cable Tension", "Tension", "N")
-    plots["torque"] = PlotDefinition("torque", "Torque", "Torque", "Nm")
-    plots["temperature"] = PlotDefinition("temperature", "Temperatures", "Temperature", "C")
-    plots["bus_voltage"] = PlotDefinition("bus_voltage", "Bus Voltage", "Voltage", "V")
+    plots["pose_translation"] = PlotDefinition(
+        "pose_translation",
+        "Linear Position",
+        "Position",
+        "mm",
+        domain="pose",
+        pose_row="position",
+        pose_column="linear",
+        sort_order=0,
+    )
+    plots["pose_rotation"] = PlotDefinition(
+        "pose_rotation",
+        "Angular Position",
+        "Angle",
+        "deg",
+        domain="pose",
+        pose_row="position",
+        pose_column="angular",
+        sort_order=1,
+    )
+    plots["pose_velocity_translation"] = PlotDefinition(
+        "pose_velocity_translation",
+        "Linear Velocity",
+        "Velocity",
+        "mm/s",
+        domain="pose",
+        pose_row="velocity",
+        pose_column="linear",
+        sort_order=2,
+    )
+    plots["pose_velocity_rotation"] = PlotDefinition(
+        "pose_velocity_rotation",
+        "Angular Velocity",
+        "Angular Velocity",
+        "deg/s",
+        domain="pose",
+        pose_row="velocity",
+        pose_column="angular",
+        sort_order=3,
+    )
+    plots["pose_acceleration_translation"] = PlotDefinition(
+        "pose_acceleration_translation",
+        "Linear Acceleration",
+        "Acceleration",
+        "mm/s^2",
+        domain="pose",
+        pose_row="acceleration",
+        pose_column="linear",
+        sort_order=4,
+    )
+    plots["pose_acceleration_rotation"] = PlotDefinition(
+        "pose_acceleration_rotation",
+        "Angular Acceleration",
+        "Angular Acceleration",
+        "deg/s^2",
+        domain="pose",
+        pose_row="acceleration",
+        pose_column="angular",
+        sort_order=5,
+    )
+    plots["position"] = PlotDefinition("position", "Cable Position", "Position", "mm", sort_order=10)
+    plots["velocity"] = PlotDefinition("velocity", "Cable Velocity", "Velocity", "mm/s", sort_order=11)
+    plots["tension"] = PlotDefinition("tension", "Cable Tension", "Tension", "N", sort_order=12)
+    plots["torque"] = PlotDefinition("torque", "Torque", "Torque", "Nm", sort_order=13)
+    plots["temperature"] = PlotDefinition("temperature", "Temperatures", "Temperature", "C", sort_order=14)
+    plots["bus_voltage"] = PlotDefinition("bus_voltage", "Bus Voltage", "Voltage", "V", sort_order=15)
     return plots
 
 
 def build_default_workspace_presets() -> PresetRegistry:
     presets: PresetRegistry = OrderedDict()
-    presets["all"] = WorkspacePreset("all", "All", ("pose_translation", "pose_rotation", "position", "velocity", "tension", "torque", "temperature", "bus_voltage"))
-    presets["pose"] = WorkspacePreset("pose", "Pose", ("pose_translation", "pose_rotation"))
-    presets["spools"] = WorkspacePreset("spools", "Spools", ("position", "velocity"))
-    presets["tension"] = WorkspacePreset("tension", "Tension", ("tension",))
-    presets["torque"] = WorkspacePreset("torque", "Torque", ("torque",))
-    presets["thermals"] = WorkspacePreset("thermals", "Thermals", ("temperature", "bus_voltage"))
+    presets["pose"] = WorkspacePreset(
+        "pose",
+        "Pose",
+        (
+            "pose_translation",
+            "pose_rotation",
+            "pose_velocity_translation",
+            "pose_velocity_rotation",
+            "pose_acceleration_translation",
+            "pose_acceleration_rotation",
+        ),
+    )
+    presets["spools"] = WorkspacePreset("spools", "Spools", ("position", "velocity", "tension", "torque"))
+    presets["thermals"] = WorkspacePreset("thermals", "System", ("temperature", "bus_voltage"))
     return presets
 
 

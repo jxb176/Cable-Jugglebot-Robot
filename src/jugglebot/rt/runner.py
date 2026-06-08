@@ -381,9 +381,9 @@ class ControlBridge(threading.Thread):
             )
 
     def _set_platform_estimate_from_feedback(self, actuator_states: tuple[ActuatorState, ...]):
-        q_cur, qd_cur, j_cur = self._platform_estimator.update_from_actuator_states(actuator_states)
+        q_cur, qd_cur, qdd_cur, j_cur = self._platform_estimator.update_from_actuator_states(actuator_states)
         if q_cur is not None and qd_cur is not None:
-            self._publish_platform_estimate(q_cur, qd_cur)
+            self._publish_platform_estimate(q_cur, qd_cur, qdd_cur)
         return q_cur, qd_cur, j_cur
 
     def _write_command_batch(self, commands):
@@ -686,7 +686,7 @@ class ControlBridge(threading.Thread):
         }
         return list(result.commands)
 
-    def _publish_platform_estimate(self, q_cur, qd_cur):
+    def _publish_platform_estimate(self, q_cur, qd_cur, qdd_cur=None):
         """
         Publish platform estimate into RuntimeMailbox for GUI telemetry.
         q_cur: [x,y,z,roll,pitch] in SI units.
@@ -695,11 +695,14 @@ class ControlBridge(threading.Thread):
         try:
             q_cur = np.asarray(q_cur, dtype=float)
             qd_cur = np.asarray(qd_cur, dtype=float)
+            qdd_cur = np.asarray(qdd_cur, dtype=float) if qdd_cur is not None else None
             t_mm = (1000.0 * float(q_cur[0]), 1000.0 * float(q_cur[1]), 1000.0 * float(q_cur[2]))
             q_est = quat_from_rpy_deg(math.degrees(float(q_cur[3])), math.degrees(float(q_cur[4])), 0.0)
             v_mps = (float(qd_cur[0]), float(qd_cur[1]), float(qd_cur[2]))
             w_rps = (float(qd_cur[3]), float(qd_cur[4]), 0.0)
-            self.state.set_hand_estimate(t_mm, q_est, v_mps=v_mps, w_rps=w_rps)
+            a_mps2 = None if qdd_cur is None or qdd_cur.shape[0] < 3 else (float(qdd_cur[0]), float(qdd_cur[1]), float(qdd_cur[2]))
+            alpha_rps2 = None if qdd_cur is None or qdd_cur.shape[0] < 5 else (float(qdd_cur[3]), float(qdd_cur[4]), 0.0)
+            self.state.set_hand_estimate(t_mm, q_est, v_mps=v_mps, w_rps=w_rps, a_mps2=a_mps2, alpha_rps2=alpha_rps2)
         except Exception:
             pass
 
@@ -840,7 +843,7 @@ class ControlBridge(threading.Thread):
 
         tau_rsp = np.full(5, np.nan, dtype=float)
         tension_rsp = np.asarray(self.state.get_axis_tension_response(), dtype=float)
-        _, _, J_len_plat = self._platform_estimator.get_latest()
+        _, _, _, J_len_plat = self._platform_estimator.get_latest()
         if J_len_plat is not None:
             try:
                 J_len_plat = np.asarray(J_len_plat, dtype=float)

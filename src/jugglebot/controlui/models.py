@@ -46,8 +46,11 @@ class TelemetryFrame:
     axis_state: tuple[int | None, ...]
     axis_error: tuple[int | None, ...]
     hand_cmd_pose: tuple[float, ...]
+    hand_cmd_vel: tuple[float, ...]
+    hand_cmd_acc: tuple[float, ...]
     hand_est_pose: tuple[float, ...]
     hand_est_vel: tuple[float, ...]
+    hand_est_acc: tuple[float, ...]
     comm_stats: CommStats = field(default_factory=CommStats)
     debug: Mapping[str, object] = field(default_factory=dict)
     raw: Mapping[str, object] = field(default_factory=dict)
@@ -121,9 +124,24 @@ def _pose_state_to_legacy_velocity(pose_state) -> tuple[float, ...]:
     linear = pose_state.get("linear_velocity_mps") or ()
     angular = pose_state.get("angular_velocity_rps") or ()
     return (
-        _float_or_nan(_vec_get(linear, 0, NAN)),
-        _float_or_nan(_vec_get(linear, 1, NAN)),
-        _float_or_nan(_vec_get(linear, 2, NAN)),
+        1000.0 * _float_or_nan(_vec_get(linear, 0, NAN)),
+        1000.0 * _float_or_nan(_vec_get(linear, 1, NAN)),
+        1000.0 * _float_or_nan(_vec_get(linear, 2, NAN)),
+        math.degrees(_float_or_nan(_vec_get(angular, 0, NAN))),
+        math.degrees(_float_or_nan(_vec_get(angular, 1, NAN))),
+        math.degrees(_float_or_nan(_vec_get(angular, 2, NAN))),
+    )
+
+
+def _pose_state_to_legacy_acceleration(pose_state) -> tuple[float, ...]:
+    if not isinstance(pose_state, Mapping):
+        return (NAN, NAN, NAN, NAN, NAN, NAN)
+    linear = pose_state.get("linear_acceleration_mps2") or ()
+    angular = pose_state.get("angular_acceleration_rps2") or ()
+    return (
+        1000.0 * _float_or_nan(_vec_get(linear, 0, NAN)),
+        1000.0 * _float_or_nan(_vec_get(linear, 1, NAN)),
+        1000.0 * _float_or_nan(_vec_get(linear, 2, NAN)),
         math.degrees(_float_or_nan(_vec_get(angular, 0, NAN))),
         math.degrees(_float_or_nan(_vec_get(angular, 1, NAN))),
         math.degrees(_float_or_nan(_vec_get(angular, 2, NAN))),
@@ -197,8 +215,11 @@ def _normalize_legacy_payload(payload: Mapping[str, object], source_id: str, rec
         axis_state=_int_tuple(payload.get("axis_state"), 6),
         axis_error=_int_tuple(payload.get("axis_error"), 6),
         hand_cmd_pose=_float_tuple(payload.get("hand_cmd_pose"), 6),
+        hand_cmd_vel=_float_tuple(payload.get("hand_cmd_vel"), 6),
+        hand_cmd_acc=_float_tuple(payload.get("hand_cmd_acc"), 6),
         hand_est_pose=_float_tuple(payload.get("hand_est_pose"), 6),
         hand_est_vel=_float_tuple(payload.get("hand_est_vel"), 6),
+        hand_est_acc=_float_tuple(payload.get("hand_est_acc"), 6),
         comm_stats=CommStats(
             can_rx_hz=_float_or_nan(payload.get("can_rx_hz")),
             can_tx_hz=_float_or_nan(payload.get("can_tx_hz")),
@@ -246,8 +267,11 @@ def _normalize_snapshot_payload(payload: Mapping[str, object], source_id: str, r
         axis_state=_actuator_field_vec(actuators, "axis_state", cast="int"),
         axis_error=_actuator_field_vec(actuators, "error_flags", cast="int"),
         hand_cmd_pose=_pose_state_to_legacy_pose(payload.get("commanded_pose")),
+        hand_cmd_vel=_pose_state_to_legacy_velocity(payload.get("commanded_pose")),
+        hand_cmd_acc=_pose_state_to_legacy_acceleration(payload.get("commanded_pose")),
         hand_est_pose=_pose_state_to_legacy_pose(payload.get("estimated_pose")),
         hand_est_vel=_pose_state_to_legacy_velocity(payload.get("estimated_pose")),
+        hand_est_acc=_pose_state_to_legacy_acceleration(payload.get("estimated_pose")),
         comm_stats=CommStats(
             can_rx_hz=_float_or_nan(bus_stats.get("can_rx_hz")),
             can_tx_hz=_float_or_nan(bus_stats.get("can_tx_hz")),

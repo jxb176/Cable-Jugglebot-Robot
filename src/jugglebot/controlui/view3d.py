@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 from PyQt6.QtOpenGL import QOpenGLWindow
-from PyQt6.QtWidgets import QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QSizePolicy, QVBoxLayout, QWidget
 import pyqtgraph.opengl as gl
 from pyqtgraph.opengl.GLViewWidget import GLViewMixin
 
@@ -113,12 +113,14 @@ class Robot3DView(QWidget):
         super().__init__(parent=parent)
         self._window = _Robot3DWindow()
         self._container = QWidget.createWindowContainer(self._window, self)
-        self._container.setMinimumHeight(360)
+        self._container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._container.setMinimumHeight(240)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._container)
-        self.setMinimumHeight(360)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMinimumHeight(240)
 
     def set_frame(self, frame: TelemetryFrame) -> None:
         self._window.set_frame(frame)

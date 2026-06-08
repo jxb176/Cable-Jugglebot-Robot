@@ -43,7 +43,14 @@ def _tuple3(values, default=float("nan")):
     return tuple(out)
 
 
-def _build_pose_state(t_mm, q, linear_velocity=None, angular_velocity=None, linear_acceleration=None):
+def _build_pose_state(
+    t_mm,
+    q,
+    linear_velocity=None,
+    angular_velocity=None,
+    linear_acceleration=None,
+    angular_acceleration=None,
+):
     if t_mm is None or q is None:
         return None
     roll, pitch, yaw = quat_to_rpy_rad(q)
@@ -57,6 +64,7 @@ def _build_pose_state(t_mm, q, linear_velocity=None, angular_velocity=None, line
         linear_velocity_mps=_tuple3(linear_velocity),
         angular_velocity_rps=_tuple3(angular_velocity),
         linear_acceleration_mps2=_tuple3(linear_acceleration),
+        angular_acceleration_rps2=_tuple3(angular_acceleration),
     )
 
 
@@ -119,10 +127,14 @@ def build_robot_state_snapshot(
         hand_q = tuple(state.hand_q)
         hand_v_mps = tuple(state.hand_v_mps)
         hand_a_mps2 = tuple(state.hand_a_mps2)
+        hand_w_rps = tuple(state.hand_w_rps)
+        hand_alpha_rps2 = tuple(state.hand_alpha_rps2)
         hand_est_t_mm = tuple(state.hand_est_t_mm)
         hand_est_q = tuple(state.hand_est_q)
         hand_est_v_mps = tuple(state.hand_est_v_mps)
         hand_est_w_rps = tuple(state.hand_est_w_rps)
+        hand_est_a_mps2 = tuple(state.hand_est_a_mps2)
+        hand_est_alpha_rps2 = tuple(state.hand_est_alpha_rps2)
         comm = {
             "can_rx_hz": float(state.comm_can_rx_hz),
             "can_tx_hz": float(state.comm_can_tx_hz),
@@ -174,13 +186,17 @@ def build_robot_state_snapshot(
         hand_t_mm,
         hand_q,
         linear_velocity=hand_v_mps,
+        angular_velocity=hand_w_rps,
         linear_acceleration=hand_a_mps2,
+        angular_acceleration=hand_alpha_rps2,
     )
     estimated_pose = _build_pose_state(
         hand_est_t_mm,
         hand_est_q,
         linear_velocity=hand_est_v_mps,
         angular_velocity=hand_est_w_rps,
+        linear_acceleration=hand_est_a_mps2,
+        angular_acceleration=hand_est_alpha_rps2,
     )
 
     return RobotState(

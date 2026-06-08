@@ -39,7 +39,8 @@ def main() -> None:
     parser.add_argument("--host", type=str, default=os.environ.get("JUGGLEBOT_HOST", "jugglepi.local"), help="Robot host/IP")
     parser.add_argument("--tcp-port", type=int, default=int(os.environ.get("JUGGLEBOT_TCP_PORT", "5555")), help="Robot TCP command port")
     parser.add_argument("--udp-port", type=int, default=int(os.environ.get("JUGGLEBOT_UDP_PORT", "5556")), help="Local UDP telemetry listen port")
-    parser.add_argument("--history-seconds", type=float, default=20.0, help="Telemetry history window for plots")
+    parser.add_argument("--history-seconds", type=float, default=60.0, help="Telemetry history retention window for plots")
+    parser.add_argument("--live-window-seconds", type=float, default=5.0, help="Default live auto-follow time window for plots")
     args = parser.parse_args()
 
     try:
@@ -61,6 +62,10 @@ def main() -> None:
 
     app = QApplication(sys.argv)
     app.aboutToQuit.connect(session.stop)
-    window = RobotControlWindow(session=session, channels=channels)
+    window = RobotControlWindow(
+        session=session,
+        channels=channels,
+        live_display_seconds=args.live_window_seconds,
+    )
     window.show()
     sys.exit(app.exec())

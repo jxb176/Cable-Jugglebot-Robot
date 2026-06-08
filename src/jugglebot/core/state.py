@@ -65,11 +65,15 @@ class RuntimeMailbox:
         self.hand_q = (1.0, 0.0, 0.0, 0.0)
         self.hand_v_mps = (0.0, 0.0, 0.0)
         self.hand_a_mps2 = (0.0, 0.0, 0.0)
+        self.hand_w_rps = (0.0, 0.0, 0.0)
+        self.hand_alpha_rps2 = (0.0, 0.0, 0.0)
         self.hand_version = 0
         self.hand_est_t_mm = (float("nan"), float("nan"), float("nan"))
         self.hand_est_q = (1.0, 0.0, 0.0, 0.0)
         self.hand_est_v_mps = (float("nan"), float("nan"), float("nan"))
         self.hand_est_w_rps = (float("nan"), float("nan"), float("nan"))
+        self.hand_est_a_mps2 = (float("nan"), float("nan"), float("nan"))
+        self.hand_est_alpha_rps2 = (float("nan"), float("nan"), float("nan"))
         self.comm_can_rx_hz = float("nan")
         self.comm_can_tx_hz = float("nan")
         self.comm_can_msg_hz = float("nan")
@@ -85,16 +89,16 @@ class RuntimeMailbox:
         self.timing_stats: TimingStats | None = None
         self.watchdog_status: WatchdogStatus | None = None
 
-    def set_hand_pose(self, t_mm, q, v_mps=None, a_mps2=None):
+    def set_hand_pose(self, t_mm, q, v_mps=None, a_mps2=None, w_rps=None, alpha_rps2=None):
         with self.lock:
-            self._set_hand_motion_locked(t_mm, q, v_mps=v_mps, a_mps2=a_mps2)
+            self._set_hand_motion_locked(t_mm, q, v_mps=v_mps, a_mps2=a_mps2, w_rps=w_rps, alpha_rps2=alpha_rps2)
             self.hand_version += 1
 
-    def set_commanded_motion_sample(self, t_mm, q, v_mps=None, a_mps2=None):
+    def set_commanded_motion_sample(self, t_mm, q, v_mps=None, a_mps2=None, w_rps=None, alpha_rps2=None):
         with self.lock:
-            self._set_hand_motion_locked(t_mm, q, v_mps=v_mps, a_mps2=a_mps2)
+            self._set_hand_motion_locked(t_mm, q, v_mps=v_mps, a_mps2=a_mps2, w_rps=w_rps, alpha_rps2=alpha_rps2)
 
-    def _set_hand_motion_locked(self, t_mm, q, v_mps=None, a_mps2=None):
+    def _set_hand_motion_locked(self, t_mm, q, v_mps=None, a_mps2=None, w_rps=None, alpha_rps2=None):
         self.hand_t_mm = (float(t_mm[0]), float(t_mm[1]), float(t_mm[2]))
         self.hand_q = q_norm((float(q[0]), float(q[1]), float(q[2]), float(q[3])))
         if v_mps is None:
@@ -105,6 +109,14 @@ class RuntimeMailbox:
             self.hand_a_mps2 = (0.0, 0.0, 0.0)
         else:
             self.hand_a_mps2 = (float(a_mps2[0]), float(a_mps2[1]), float(a_mps2[2]))
+        if w_rps is None:
+            self.hand_w_rps = (0.0, 0.0, 0.0)
+        else:
+            self.hand_w_rps = (float(w_rps[0]), float(w_rps[1]), float(w_rps[2]))
+        if alpha_rps2 is None:
+            self.hand_alpha_rps2 = (0.0, 0.0, 0.0)
+        else:
+            self.hand_alpha_rps2 = (float(alpha_rps2[0]), float(alpha_rps2[1]), float(alpha_rps2[2]))
 
     def get_hand_pose(self):
         with self.lock:
@@ -112,9 +124,9 @@ class RuntimeMailbox:
 
     def get_hand_motion(self):
         with self.lock:
-            return self.hand_t_mm, self.hand_q, self.hand_v_mps, self.hand_a_mps2
+            return self.hand_t_mm, self.hand_q, self.hand_v_mps, self.hand_a_mps2, self.hand_w_rps, self.hand_alpha_rps2
 
-    def set_hand_estimate(self, t_mm, q, v_mps=None, w_rps=None):
+    def set_hand_estimate(self, t_mm, q, v_mps=None, w_rps=None, a_mps2=None, alpha_rps2=None):
         with self.lock:
             self.hand_est_t_mm = (float(t_mm[0]), float(t_mm[1]), float(t_mm[2]))
             self.hand_est_q = q_norm((float(q[0]), float(q[1]), float(q[2]), float(q[3])))
@@ -126,10 +138,25 @@ class RuntimeMailbox:
                 self.hand_est_w_rps = (float("nan"), float("nan"), float("nan"))
             else:
                 self.hand_est_w_rps = (float(w_rps[0]), float(w_rps[1]), float(w_rps[2]))
+            if a_mps2 is None:
+                self.hand_est_a_mps2 = (float("nan"), float("nan"), float("nan"))
+            else:
+                self.hand_est_a_mps2 = (float(a_mps2[0]), float(a_mps2[1]), float(a_mps2[2]))
+            if alpha_rps2 is None:
+                self.hand_est_alpha_rps2 = (float("nan"), float("nan"), float("nan"))
+            else:
+                self.hand_est_alpha_rps2 = (float(alpha_rps2[0]), float(alpha_rps2[1]), float(alpha_rps2[2]))
 
     def get_hand_estimate(self):
         with self.lock:
-            return self.hand_est_t_mm, self.hand_est_q, self.hand_est_v_mps, self.hand_est_w_rps
+            return (
+                self.hand_est_t_mm,
+                self.hand_est_q,
+                self.hand_est_v_mps,
+                self.hand_est_w_rps,
+                self.hand_est_a_mps2,
+                self.hand_est_alpha_rps2,
+            )
 
     def set_comm_stats(
         self,

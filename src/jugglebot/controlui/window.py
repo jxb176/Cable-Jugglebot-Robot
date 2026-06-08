@@ -8,10 +8,12 @@ import os
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QShowEvent
 from PyQt6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QHBoxLayout,
+    QLayout,
     QLabel,
     QPushButton,
     QSizePolicy,
@@ -23,7 +25,7 @@ from PyQt6.QtWidgets import (
 import pyqtgraph as pg
 
 from .channels import STYLE_DASH, ChannelRegistry, build_default_channel_registry
-from .history import TelemetryHistory
+from .history import HistorySnapshot, TelemetryHistory
 from .session import LiveRobotSession
 from .workspace import PlotWorkspace
 try:
@@ -90,25 +92,36 @@ ODRIVE_ERROR_BITS = {
 }
 
 LIVE_VIEW_INTERVAL_MS = 33
-DETAIL_VIEW_INTERVAL_MS = 100
+PLOT_VIEW_INTERVAL_MS = 100
+STATUS_VIEW_INTERVAL_MS = 200
 CONNECTION_STATUS_INTERVAL_MS = 500
 
 
 class RobotControlWindow(QWidget):
-    def __init__(self, session: LiveRobotSession, channels: ChannelRegistry | None = None):
+    def __init__(
+        self,
+        session: LiveRobotSession,
+        channels: ChannelRegistry | None = None,
+        *,
+        live_display_seconds: float = 5.0,
+    ):
         super().__init__()
         self.session = session
         self.history: TelemetryHistory = session.history
         self.channels = channels or build_default_channel_registry()
         self.telem_timeout = 2.0
         self.paused_frame = None
-        self.paused_times: list[float] = []
-        self.paused_series: dict[str, list[float]] = {}
+        self.paused_snapshot: HistorySnapshot | None = None
+        self._plots_dirty = True
+        self._status_dirty = True
+        self._startup_geometry_applied = False
 
         self.setWindowTitle("Robot Controller + Telemetry")
         self.resize(1400, 1050)
+        self.setMinimumSize(400, 780)
 
         layout = QVBoxLayout()
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
 
         self.status_label = QLabel("Telemetry: waiting...")
         layout.addWidget(self.status_label)
@@ -117,6 +130,7 @@ class RobotControlWindow(QWidget):
         )
         layout.addWidget(self.comm_stats_label)
 
+        self.robot_3d_view = None
         scene_header = QHBoxLayout()
         scene_header.addWidget(QLabel("Robot 3D View"))
         scene_header.addStretch(1)
@@ -124,7 +138,6 @@ class RobotControlWindow(QWidget):
         scene_header.addWidget(self.scene_hint_label)
         layout.addLayout(scene_header)
 
-        self.robot_3d_view = None
         if Robot3DView is not None:
             try:
                 self.robot_3d_view = Robot3DView(self)
@@ -299,10 +312,15 @@ class RobotControlWindow(QWidget):
         layout.addWidget(QLabel("Axis Data"))
         layout.addWidget(self.axis_table)
 
-        self.plot_workspace = PlotWorkspace(self.channels, pen_factory=self._channel_pen, parent=self)
+        self.plot_workspace = PlotWorkspace(
+            self.channels,
+            pen_factory=self._channel_pen,
+            live_display_seconds=live_display_seconds,
+            parent=self,
+        )
         self.plot_workspace.live_mode_changed.connect(self._on_live_mode_changed)
-        self.plot_workspace.configuration_changed.connect(self.update_gui)
-        layout.addWidget(self.plot_workspace)
+        self.plot_workspace.configuration_changed.connect(self._on_workspace_configuration_changed)
+        layout.addWidget(self.plot_workspace, 1)
         self.setLayout(layout)
 
         self.populate_profile_dropdown()
@@ -313,13 +331,36 @@ class RobotControlWindow(QWidget):
         self.live_timer.timeout.connect(self.update_live_views)
         self.live_timer.start(LIVE_VIEW_INTERVAL_MS)
 
-        self.detail_timer = QTimer(self)
-        self.detail_timer.timeout.connect(self.update_gui)
-        self.detail_timer.start(DETAIL_VIEW_INTERVAL_MS)
+        self.plot_timer = QTimer(self)
+        self.plot_timer.timeout.connect(self.update_plots)
+        self.plot_timer.start(PLOT_VIEW_INTERVAL_MS)
+
+        self.status_timer = QTimer(self)
+        self.status_timer.timeout.connect(self.update_status_widgets)
+        self.status_timer.start(STATUS_VIEW_INTERVAL_MS)
 
         self.conn_timer = QTimer(self)
         self.conn_timer.timeout.connect(self.check_connection_status)
         self.conn_timer.start(CONNECTION_STATUS_INTERVAL_MS)
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        if self._startup_geometry_applied:
+            return
+        self._startup_geometry_applied = True
+        self._apply_startup_geometry()
+
+    def _apply_startup_geometry(self) -> None:
+        handle = self.windowHandle()
+        screen = handle.screen() if handle is not None else None
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        left = available.left()
+        top = available.top()
+        width = max(1, available.width() // 2)
+        height = max(1, available.height())
+        self.setGeometry(left, top, width, height)
 
     def _make_spin(self, parent_layout: QHBoxLayout, label: str, lo: float, hi: float, dec: int, step: float, suffix: str) -> QDoubleSpinBox:
         col = QVBoxLayout()
@@ -341,8 +382,7 @@ class RobotControlWindow(QWidget):
     def _on_live_mode_changed(self, live: bool) -> None:
         if live:
             self.paused_frame = None
-            self.paused_times = []
-            self.paused_series = {}
+            self.paused_snapshot = None
             frame = self.session.latest_frame
             if frame is not None and self.robot_3d_view is not None:
                 self.robot_3d_view.set_frame(frame)
@@ -351,9 +391,17 @@ class RobotControlWindow(QWidget):
             if frame is None:
                 return
             self.paused_frame = frame
-            self.paused_times = self.history.times()
-            self.paused_series = {key: self.history.values(key) for key in self.channels}
-        self.update_gui()
+            self.paused_snapshot = self.history.snapshot(self.channels)
+            if self.robot_3d_view is not None:
+                self.robot_3d_view.set_frame(frame)
+        self._mark_status_dirty()
+        self._mark_plots_dirty()
+        self.update_status_widgets()
+        self.update_plots()
+
+    def _on_workspace_configuration_changed(self) -> None:
+        self._mark_plots_dirty()
+        self.update_plots()
 
     def check_connection_status(self) -> None:
         if self.session.has_recent_telemetry(self.telem_timeout):
@@ -596,29 +644,41 @@ class RobotControlWindow(QWidget):
         frame = self.session.latest_frame
         if frame is None:
             return
+        if self.plot_workspace.is_live_mode:
+            self._mark_status_dirty()
+            self._mark_plots_dirty()
+            if self.robot_3d_view is not None:
+                self.robot_3d_view.set_frame(frame)
 
-        if self.robot_3d_view is not None and self.plot_workspace.is_live_mode:
-            self.robot_3d_view.set_frame(frame)
+    def update_plots(self) -> None:
+        if not self._plots_dirty:
+            return
 
-    def update_gui(self) -> None:
+        if self.plot_workspace.is_live_mode:
+            visible_keys = self.plot_workspace.visible_channel_keys()
+            snapshot = self.history.snapshot(visible_keys)
+            times = snapshot.times
+            series_by_key = snapshot.series_by_key
+        else:
+            if self.paused_snapshot is None:
+                return
+            visible_keys = self.plot_workspace.visible_channel_keys()
+            times = self.paused_snapshot.times
+            series_by_key = {key: self.paused_snapshot.series_by_key.get(key, []) for key in visible_keys}
+
+        self.plot_workspace.render(times, series_by_key)
+        self._plots_dirty = False
+
+    def update_status_widgets(self) -> None:
+        if not self._status_dirty:
+            return
+
         if self.plot_workspace.is_live_mode:
             frame = self.session.latest_frame
-            if frame is None:
-                if self.session.poll() <= 0:
-                    return
-                frame = self.session.latest_frame
-                if frame is None:
-                    return
-            times = self.history.times()
-            visible_keys = self.plot_workspace.visible_channel_keys()
-            series_by_key = {key: self.history.values(key) for key in visible_keys}
         else:
             frame = self.paused_frame
-            if frame is None:
-                return
-            times = self.paused_times
-            visible_keys = self.plot_workspace.visible_channel_keys()
-            series_by_key = {key: self.paused_series.get(key, []) for key in visible_keys}
+        if frame is None:
+            return
 
         self.hand_est_label.setText(
             "Pose Estimate: "
@@ -656,7 +716,17 @@ class RobotControlWindow(QWidget):
             self._set_table_cell(axis, 7, frame.temp_motor_c[axis], "{:.1f}")
             self._set_table_cell(axis, 8, frame.temp_fet_c[axis], "{:.1f}")
 
-        self.plot_workspace.render(times, series_by_key)
+        self._status_dirty = False
+
+    def update_gui(self) -> None:
+        self.update_status_widgets()
+        self.update_plots()
+
+    def _mark_plots_dirty(self) -> None:
+        self._plots_dirty = True
+
+    def _mark_status_dirty(self) -> None:
+        self._status_dirty = True
 
     @staticmethod
     def _fmt(value, spec: str) -> str:

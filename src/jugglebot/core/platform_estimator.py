@@ -36,14 +36,15 @@ class CablePlatformEstimator:
         self._update_dt = 1.0 / max(1.0, float(update_rate_hz))
         self._q = np.zeros(5, dtype=float)
         self._qd = np.zeros(5, dtype=float)
+        self._qdd = np.zeros(5, dtype=float)
         self._jacobian = np.zeros((len(self.axis_ids), 5), dtype=float)
         self._last_perf = 0.0
         self._has_estimate = False
 
     def get_latest(self):
         if not self._has_estimate:
-            return None, None, None
-        return self._q.copy(), self._qd.copy(), self._jacobian.copy()
+            return None, None, None, None
+        return self._q.copy(), self._qd.copy(), self._qdd.copy(), self._jacobian.copy()
 
     def update_from_actuator_states(
         self,
@@ -86,8 +87,15 @@ class CablePlatformEstimator:
         except Exception:
             return self.get_latest()
 
+        if self._has_estimate:
+            dt = max(1e-6, float(now_perf) - self._last_perf)
+            qdd_new = (qd_new - self._qd) / dt
+        else:
+            qdd_new = np.zeros(5, dtype=float)
+
         self._q = q_new.copy()
         self._qd = qd_new.copy()
+        self._qdd = np.asarray(qdd_new, dtype=float)
         self._jacobian = jacobian.copy()
         self._last_perf = float(now_perf)
         self._has_estimate = True
