@@ -1,22 +1,24 @@
 """Main controller GUI window."""
 
 from __future__ import annotations
-
-import csv
 import math
 import os
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QShowEvent
+from PyQt6.QtGui import QFont, QShowEvent
 from PyQt6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
+    QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -97,6 +99,42 @@ STATUS_VIEW_INTERVAL_MS = 200
 CONNECTION_STATUS_INTERVAL_MS = 500
 
 
+class SelectAllDoubleSpinBox(QDoubleSpinBox):
+    def focusInEvent(self, event) -> None:
+        super().focusInEvent(event)
+        QTimer.singleShot(0, self._select_all_text)
+
+    def mousePressEvent(self, event) -> None:
+        line_edit = self.lineEdit()
+        select_all = (
+            event.button() == Qt.MouseButton.LeftButton
+            and line_edit is not None
+            and line_edit.geometry().contains(event.position().toPoint())
+        )
+        super().mousePressEvent(event)
+        if select_all:
+            QTimer.singleShot(0, self._select_all_text)
+
+    def _select_all_text(self) -> None:
+        line_edit = self.lineEdit()
+        if line_edit is not None:
+            line_edit.selectAll()
+
+
+class RefreshOnPopupComboBox(QComboBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._popup_refresh_cb = None
+
+    def set_popup_refresh_callback(self, callback) -> None:
+        self._popup_refresh_cb = callback
+
+    def showPopup(self) -> None:
+        if self._popup_refresh_cb is not None:
+            self._popup_refresh_cb()
+        super().showPopup()
+
+
 class RobotControlWindow(QWidget):
     def __init__(
         self,
@@ -120,170 +158,255 @@ class RobotControlWindow(QWidget):
         self.resize(1400, 1050)
         self.setMinimumSize(400, 780)
 
-        layout = QVBoxLayout()
-        layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        root_layout = QVBoxLayout()
+        root_layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
 
-        self.status_label = QLabel("Telemetry: waiting...")
-        layout.addWidget(self.status_label)
-        self.comm_stats_label = QLabel(
-            "Comm: CAN rx=--- Hz tx=--- Hz total=--- Hz util=---% pos_fbk(avg/axis)=--- Hz p0[min,max]=---/--- ms"
-        )
-        layout.addWidget(self.comm_stats_label)
+        self.main_splitter = QSplitter(Qt.Orientation.Vertical, self)
+        self.top_splitter = QSplitter(Qt.Orientation.Horizontal, self.main_splitter)
+
+        self.left_panel_scroll = QScrollArea(self.top_splitter)
+        self.left_panel_scroll.setWidgetResizable(True)
+        self.left_panel_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.left_panel_container = QWidget(self.left_panel_scroll)
+        self.left_panel_layout = QVBoxLayout(self.left_panel_container)
+        self.left_panel_layout.setContentsMargins(0, 0, 0, 0)
+        self.left_panel_layout.setSpacing(10)
+        self.left_panel_scroll.setWidget(self.left_panel_container)
+
+        self.top_right_container = QWidget(self.top_splitter)
+        self.top_right_layout = QVBoxLayout(self.top_right_container)
+        self.top_right_layout.setContentsMargins(0, 0, 0, 0)
+        self.top_right_layout.setSpacing(10)
+
+        self.robot_state_group, robot_state_layout = self._create_section("Robot State")
+        self.command_inputs_group, command_inputs_layout = self._create_section("Command Inputs")
+        self.command_inputs_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.robot_actions_group, robot_actions_layout = self._create_section("Robot Actions")
+        self.scene_group, scene_layout = self._create_section("Robot 3D View")
+        self.scene_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        link_grid = QGridLayout()
+        link_grid.setHorizontalSpacing(10)
+        link_grid.setVerticalSpacing(6)
+        self.tcp_status_badge = self._make_status_badge("DOWN")
+        self.udp_status_badge = self._make_status_badge("DOWN")
+        self.can_status_badge = self._make_status_badge("DOWN")
+        self.target_value_label = QLabel("ROBOT")
+        self.can_util_value_label = QLabel("---%")
+        self.status_message_label = QLabel("")
+        self.status_message_label.setWordWrap(True)
+        link_grid.addWidget(QLabel("TCP"), 0, 0)
+        link_grid.addWidget(self.tcp_status_badge, 0, 1)
+        link_grid.addWidget(QLabel("UDP"), 0, 2)
+        link_grid.addWidget(self.udp_status_badge, 0, 3)
+        link_grid.addWidget(QLabel("Target"), 1, 0)
+        link_grid.addWidget(self.target_value_label, 1, 1)
+        link_grid.addWidget(QLabel("CAN"), 1, 2)
+        link_grid.addWidget(self.can_status_badge, 1, 3)
+        link_grid.addWidget(QLabel("Util"), 1, 4)
+        link_grid.addWidget(self.can_util_value_label, 1, 5)
+        robot_state_layout.addLayout(link_grid)
+        robot_state_layout.addWidget(self._make_subsection_label("Pose Feedback"))
+
+        pose_feedback_rows = ["X (mm)", "Y (mm)", "Z (mm)", "Roll (deg)", "Pitch (deg)"]
+        self.pose_feedback_table = QTableWidget(len(pose_feedback_rows), 2)
+        self.pose_feedback_table.setHorizontalHeaderLabels(["Command Feedback", "Position Feedback"])
+        self.pose_feedback_table.setVerticalHeaderLabels(pose_feedback_rows)
+        self.pose_feedback_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.pose_feedback_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.pose_feedback_table.resizeColumnsToContents()
+        self.pose_feedback_table.setColumnWidth(0, 150)
+        self.pose_feedback_table.setColumnWidth(1, 150)
+        row_h = self.pose_feedback_table.verticalHeader().defaultSectionSize()
+        hdr_h = self.pose_feedback_table.horizontalHeader().height()
+        frame_w = 2 * self.pose_feedback_table.frameWidth()
+        self.pose_feedback_table.setMinimumHeight(hdr_h + len(pose_feedback_rows) * row_h + frame_w + 8)
+        robot_state_layout.addWidget(self.pose_feedback_table)
 
         self.robot_3d_view = None
-        scene_header = QHBoxLayout()
-        scene_header.addWidget(QLabel("Robot 3D View"))
-        scene_header.addStretch(1)
         self.scene_hint_label = QLabel("Estimated = cyan, commanded = amber")
-        scene_header.addWidget(self.scene_hint_label)
-        layout.addLayout(scene_header)
+        scene_layout.addWidget(self.scene_hint_label)
 
         if Robot3DView is not None:
             try:
                 self.robot_3d_view = Robot3DView(self)
-                layout.addWidget(self.robot_3d_view)
+                scene_layout.addWidget(self.robot_3d_view, 1)
             except Exception as exc:
                 fallback = QLabel(f"3D view unavailable: {exc}")
                 fallback.setWordWrap(True)
-                layout.addWidget(fallback)
+                scene_layout.addWidget(fallback)
         else:
             fallback = QLabel("3D view unavailable: OpenGL view module could not be imported.")
             fallback.setWordWrap(True)
-            layout.addWidget(fallback)
+            scene_layout.addWidget(fallback)
 
-        layout.addWidget(QLabel("Pose Command (Global): X/Y/Z (mm), Roll/Pitch (deg). Yaw assumed 0."))
+        pose_specs = (
+            ("X", -500.0, 500.0, 2, 1.0, " mm", ".1f"),
+            ("Y", -500.0, 500.0, 2, 1.0, " mm", ".1f"),
+            ("Z", -500.0, 500.0, 2, 1.0, " mm", ".1f"),
+            ("Roll", -45.0, 45.0, 2, 1.0, " deg", ".2f"),
+            ("Pitch", -45.0, 45.0, 2, 1.0, " deg", ".2f"),
+        )
+        self._pose_feedback_formats = tuple(spec[6] for spec in pose_specs)
+        self._pose_feedback_units = tuple(spec[5].strip() for spec in pose_specs)
 
-        hand_row = QHBoxLayout()
-        self.hand_x = self._make_spin(hand_row, "X", -500.0, 500.0, 2, 1.0, " mm")
-        self.hand_y = self._make_spin(hand_row, "Y", -500.0, 500.0, 2, 1.0, " mm")
-        self.hand_z = self._make_spin(hand_row, "Z", -500.0, 500.0, 2, 1.0, " mm")
-        self.hand_roll = self._make_spin(hand_row, "Roll", -45.0, 45.0, 2, 1.0, " deg")
-        self.hand_pitch = self._make_spin(hand_row, "Pitch", -45.0, 45.0, 2, 1.0, " deg")
-        layout.addLayout(hand_row)
+        command_inputs_layout.setSpacing(10)
+        command_inputs_row = QHBoxLayout()
+        command_inputs_row.setSpacing(16)
 
-        btns = QHBoxLayout()
-        self.btn_hand_send = QPushButton("Send Pose")
-        self.btn_hand_send.clicked.connect(self.send_pose)
-        btns.addWidget(self.btn_hand_send)
-        btns.addStretch(1)
-        layout.addLayout(btns)
-
-        self.hand_est_label = QLabel("Pose Estimate: X=--- mm  Y=--- mm  Z=--- mm  Roll=--- deg  Pitch=--- deg")
-        layout.addWidget(self.hand_est_label)
-
-        home_layout = QVBoxLayout()
-        home_layout.addWidget(QLabel("Home Position (mm)"))
-        self.home_spins = []
-        home_row = QHBoxLayout()
-        for axis in range(6):
-            col = QVBoxLayout()
-            col.addWidget(QLabel(f"A{axis + 1}"))
-            spin = QDoubleSpinBox()
-            spin.setDecimals(4)
-            spin.setRange(-100.0, 100.0)
-            spin.setSingleStep(0.01)
-            spin.setValue(0.0)
-            col.addWidget(spin)
-            home_row.addLayout(col)
-            self.home_spins.append(spin)
-        home_layout.addLayout(home_row)
-        home_btn_row = QHBoxLayout()
-        self.btn_home = QPushButton("HOME")
-        self.btn_home.clicked.connect(self.send_home)
-        home_btn_row.addWidget(self.btn_home)
-        home_btn_row.addStretch(1)
-        home_layout.addLayout(home_btn_row)
-        layout.addLayout(home_layout)
-
-        pret_layout = QHBoxLayout()
-        pret_layout.addWidget(QLabel("Pretension Upper (A1,A3,A5) [N]:"))
+        pretension_inputs_layout = QVBoxLayout()
+        pretension_inputs_layout.setSpacing(6)
+        pretension_inputs_layout.addWidget(self._make_subsection_label("Pretension"))
+        pretension_inputs_layout.addWidget(QLabel("Upper Pretension [N]"))
         self.pret_upper_spin = QDoubleSpinBox()
         self.pret_upper_spin.setDecimals(2)
         self.pret_upper_spin.setRange(0.0, 500.0)
         self.pret_upper_spin.setSingleStep(1.0)
         self.pret_upper_spin.setValue(3.0)
-        pret_layout.addWidget(self.pret_upper_spin)
-        pret_layout.addWidget(QLabel("Pretension Lower (A2,A4,A6) [N]:"))
+        pretension_inputs_layout.addWidget(self.pret_upper_spin)
+        pretension_inputs_layout.addWidget(QLabel("Lower Pretension [N]"))
         self.pret_lower_spin = QDoubleSpinBox()
         self.pret_lower_spin.setDecimals(2)
         self.pret_lower_spin.setRange(0.0, 500.0)
         self.pret_lower_spin.setSingleStep(1.0)
         self.pret_lower_spin.setValue(3.0)
-        pret_layout.addWidget(self.pret_lower_spin)
-        self.btn_pretension = QPushButton("PRETENSION")
-        self.btn_pretension.clicked.connect(self.send_pretension)
-        pret_layout.addWidget(self.btn_pretension)
-        layout.addLayout(pret_layout)
+        pretension_inputs_layout.addWidget(self.pret_lower_spin)
+        pretension_inputs_layout.addStretch(1)
+        command_inputs_row.addLayout(pretension_inputs_layout, 1)
 
-        gain_layout = QHBoxLayout()
-        gain_layout.addWidget(QLabel("Spool Gain Multipliers:"))
-        self.spool_kp_mult_spin = QDoubleSpinBox()
-        self.spool_kp_mult_spin.setDecimals(2)
-        self.spool_kp_mult_spin.setRange(0.0, 20.0)
-        self.spool_kp_mult_spin.setSingleStep(0.1)
-        self.spool_kp_mult_spin.setValue(1.0)
-        self.spool_kp_mult_spin.setPrefix("Spool Kp x")
-        gain_layout.addWidget(self.spool_kp_mult_spin)
-        self.spool_kd_mult_spin = QDoubleSpinBox()
-        self.spool_kd_mult_spin.setDecimals(2)
-        self.spool_kd_mult_spin.setRange(0.0, 20.0)
-        self.spool_kd_mult_spin.setSingleStep(0.1)
-        self.spool_kd_mult_spin.setValue(1.0)
-        self.spool_kd_mult_spin.setPrefix("Spool Kd x")
-        gain_layout.addWidget(self.spool_kd_mult_spin)
-        self.btn_apply_gain_mult = QPushButton("Apply Gains")
-        self.btn_apply_gain_mult.clicked.connect(self.send_spool_gain_mult)
-        gain_layout.addWidget(self.btn_apply_gain_mult)
-        layout.addLayout(gain_layout)
+        home_inputs_layout = QVBoxLayout()
+        home_inputs_layout.setSpacing(6)
+        home_inputs_layout.addWidget(self._make_subsection_label("Home Spool Position"))
+        self.home_spins = []
+        home_grid = QGridLayout()
+        home_grid.setHorizontalSpacing(8)
+        home_grid.setVerticalSpacing(6)
+        home_grid.setColumnStretch(0, 0)
+        home_grid.setColumnStretch(1, 0)
+        for axis in range(6):
+            spin = QDoubleSpinBox()
+            spin.setDecimals(4)
+            spin.setRange(-100.0, 100.0)
+            spin.setSingleStep(0.01)
+            spin.setValue(0.0)
+            self._set_spin_text_width(spin, "-100.0000")
+            self.home_spins.append(spin)
+            home_grid.addWidget(QLabel(f"A{axis + 1}"), axis, 0)
+            home_grid.addWidget(spin, axis, 1)
+        home_inputs_layout.addLayout(home_grid)
+        home_inputs_layout.addStretch(1)
+        command_inputs_row.addLayout(home_inputs_layout, 1)
 
-        state_layout = QHBoxLayout()
-        self.btn_enable = QPushButton("Enable")
-        self.btn_disable = QPushButton("Disable")
-        self.btn_estop = QPushButton("ESTOP")
-        self.btn_enable.clicked.connect(lambda: self.send_state("enable"))
+        manual_pose_layout = QVBoxLayout()
+        manual_pose_layout.setSpacing(6)
+        manual_pose_layout.addWidget(self._make_subsection_label("Manual Pose"))
+        pose_grid = QGridLayout()
+        pose_grid.setHorizontalSpacing(12)
+        pose_grid.setVerticalSpacing(6)
+        pose_grid.setColumnStretch(0, 0)
+        pose_grid.setColumnStretch(1, 0)
+        pose_grid.addWidget(QLabel("Axis"), 0, 0)
+        pose_grid.addWidget(QLabel("Input"), 0, 1)
+
+        self.hand_x = self._make_value_spin(*pose_specs[0][1:6])
+        self.hand_y = self._make_value_spin(*pose_specs[1][1:6])
+        self.hand_z = self._make_value_spin(*pose_specs[2][1:6])
+        self.hand_roll = self._make_value_spin(*pose_specs[3][1:6])
+        self.hand_pitch = self._make_value_spin(*pose_specs[4][1:6])
+        pose_spins = [self.hand_x, self.hand_y, self.hand_z, self.hand_roll, self.hand_pitch]
+
+        for row, ((axis_label, *_rest), spin) in enumerate(zip(pose_specs, pose_spins), start=1):
+            pose_grid.addWidget(QLabel(axis_label), row, 0)
+            pose_grid.addWidget(self._make_spin_with_unit(spin, self._pose_feedback_units[row - 1]), row, 1)
+
+        self.btn_hand_send = self._make_command_button("Send Pose")
+        self.btn_hand_send.clicked.connect(self.send_pose)
+        self.btn_hand_send.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        pose_grid.addWidget(self.btn_hand_send, len(pose_specs) + 1, 1, alignment=Qt.AlignmentFlag.AlignLeft)
+        manual_pose_layout.addLayout(pose_grid)
+        manual_pose_layout.addStretch(1)
+        command_inputs_row.addLayout(manual_pose_layout, 1)
+
+        space_mouse_layout = QVBoxLayout()
+        space_mouse_layout.setSpacing(6)
+        space_mouse_layout.addWidget(self._make_subsection_label("SpaceMouse"))
+        self.btn_space_mouse = self._make_toggle_command_button("SpaceMouse", "#7c3aed", "#6d28d9")
+        self.btn_space_mouse.toggled.connect(self._update_input_mode_status)
+        space_mouse_layout.addWidget(self.btn_space_mouse, alignment=Qt.AlignmentFlag.AlignLeft)
+        space_mouse_layout.addWidget(QLabel("Mode"))
+        self.input_mode_combo = QComboBox()
+        self.input_mode_combo.addItems(
+            [
+                "Position",
+                "Velocity",
+                "Acceleration",
+            ]
+        )
+        self.input_mode_combo.currentIndexChanged.connect(self._update_input_mode_status)
+        space_mouse_layout.addWidget(self.input_mode_combo)
+        gain_row = QHBoxLayout()
+        gain_row.addWidget(QLabel("Sensitivity"))
+        self.input_mode_gain_spin = QDoubleSpinBox()
+        self.input_mode_gain_spin.setDecimals(2)
+        self.input_mode_gain_spin.setRange(0.05, 20.0)
+        self.input_mode_gain_spin.setSingleStep(0.05)
+        self.input_mode_gain_spin.setValue(1.0)
+        self.input_mode_gain_spin.valueChanged.connect(self._update_input_mode_status)
+        gain_row.addWidget(self.input_mode_gain_spin)
+        space_mouse_layout.addLayout(gain_row)
+        self.input_mode_status_label = QLabel()
+        self.input_mode_status_label.setWordWrap(True)
+        space_mouse_layout.addWidget(self.input_mode_status_label)
+        space_mouse_layout.addStretch(1)
+        command_inputs_row.addLayout(space_mouse_layout, 1)
+
+        robot_actions_layout.setSpacing(10)
+
+        self.btn_disable = self._make_state_command_button("Standby", "#667085", "#475467")
+        self.btn_pretension = self._make_state_command_button("Pretension", "#d97706", "#b45309")
+        self.btn_home = self._make_state_command_button("Home", "#2563eb", "#1d4ed8")
+        self.btn_enable = self._make_state_command_button("Enable", "#15803d", "#166534")
+        self.btn_estop = self._make_state_command_button("Estop", "#b42318", "#912018")
+
         self.btn_disable.clicked.connect(lambda: self.send_state("disable"))
+        self.btn_pretension.clicked.connect(self.send_pretension)
+        self.btn_home.clicked.connect(self.send_home)
+        self.btn_enable.clicked.connect(lambda: self.send_state("enable"))
         self.btn_estop.clicked.connect(lambda: self.send_state("estop"))
-        state_layout.addWidget(self.btn_enable)
-        state_layout.addWidget(self.btn_disable)
-        state_layout.addWidget(self.btn_estop)
-        layout.addLayout(state_layout)
 
-        prof_layout = QHBoxLayout()
-        self.profile_combo = QComboBox()
-        self.profile_refresh_btn = QPushButton("Refresh")
-        self.profile_send_btn = QPushButton("Send Profile")
-        self.profile_rate = QDoubleSpinBox()
-        self.profile_rate.setDecimals(1)
-        self.profile_rate.setRange(1.0, 1000.0)
-        self.profile_rate.setSingleStep(10.0)
-        self.profile_rate.setValue(100.0)
-        self.profile_start_btn = QPushButton("Start Profile")
-        self.profile_refresh_btn.clicked.connect(self.populate_profile_dropdown)
-        self.profile_send_btn.clicked.connect(self.on_send_profile)
-        self.profile_start_btn.clicked.connect(self.on_start_profile)
-        self.profile_type_combo = QComboBox()
-        self.profile_type_combo.addItems(["Axis Profile (mm)", "Pose Profile (XYZ mm, RPY deg)"])
-        prof_layout.addWidget(QLabel("Profile CSV:"))
-        prof_layout.addWidget(self.profile_combo, 1)
-        prof_layout.addWidget(self.profile_type_combo)
-        prof_layout.addWidget(self.profile_refresh_btn)
-        prof_layout.addWidget(self.profile_send_btn)
-        prof_layout.addWidget(QLabel("Rate (Hz):"))
-        prof_layout.addWidget(self.profile_rate)
-        prof_layout.addWidget(self.profile_start_btn)
-        layout.addLayout(prof_layout)
+        self._state_buttons_by_state = {
+            "disable": self.btn_disable,
+            "pretension": self.btn_pretension,
+            "enable": self.btn_enable,
+            "estop": self.btn_estop,
+        }
+        self._all_state_buttons = [
+            self.btn_disable,
+            self.btn_pretension,
+            self.btn_home,
+            self.btn_enable,
+            self.btn_estop,
+        ]
 
-        jp_layout = QHBoxLayout()
-        jp_layout.addWidget(QLabel("JugglePath:"))
-        self.jp_profile_combo = QComboBox()
-        self.jp_refresh_btn = QPushButton("Refresh JP")
-        self.jp_send_start_btn = QPushButton("Send + Start JugglePath")
-        self.jp_refresh_btn.clicked.connect(self.populate_jugglepath_dropdown)
+        state_button_row = QHBoxLayout()
+        state_button_row.setSpacing(8)
+        for button in self._all_state_buttons:
+            state_button_row.addWidget(button, 1)
+        robot_actions_layout.addLayout(state_button_row)
+        profile_layout = QVBoxLayout()
+        profile_layout.setSpacing(6)
+        profile_layout.addWidget(self._make_subsection_label("Profile"))
+        self.jp_profile_combo = RefreshOnPopupComboBox(self)
+        self.jp_profile_combo.set_popup_refresh_callback(self.populate_jugglepath_dropdown)
+        profile_layout.addWidget(QLabel("Profile"))
+        profile_layout.addWidget(self.jp_profile_combo)
+        self.jp_send_start_btn = self._make_command_button("Run Profile")
         self.jp_send_start_btn.clicked.connect(self.on_send_start_jugglepath)
-        jp_layout.addWidget(self.jp_profile_combo, 1)
-        jp_layout.addWidget(self.jp_refresh_btn)
-        jp_layout.addWidget(self.jp_send_start_btn)
-        layout.addLayout(jp_layout)
+        profile_layout.addWidget(self.jp_send_start_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+        profile_layout.addStretch(1)
+        command_inputs_row.addLayout(profile_layout, 1)
+        command_inputs_layout.addLayout(command_inputs_row)
+        command_inputs_layout.addWidget(self.status_message_label)
 
         self.axis_table_cols = [
             "State",
@@ -309,8 +432,15 @@ class RobotControlWindow(QWidget):
         self.axis_table.resizeColumnsToContents()
         self.axis_table.setColumnWidth(0, 150)
         self.axis_table.setColumnWidth(1, 150)
-        layout.addWidget(QLabel("Axis Data"))
-        layout.addWidget(self.axis_table)
+        robot_state_layout.addWidget(self._make_subsection_label("Axis Data"))
+        robot_state_layout.addWidget(self.axis_table)
+
+        self.left_panel_layout.addWidget(self.robot_actions_group)
+        self.left_panel_layout.addWidget(self.robot_state_group)
+        self.left_panel_layout.addWidget(self.command_inputs_group)
+        self.left_panel_layout.addStretch(1)
+
+        self.top_right_layout.addWidget(self.scene_group, 1)
 
         self.plot_workspace = PlotWorkspace(
             self.channels,
@@ -320,11 +450,20 @@ class RobotControlWindow(QWidget):
         )
         self.plot_workspace.live_mode_changed.connect(self._on_live_mode_changed)
         self.plot_workspace.configuration_changed.connect(self._on_workspace_configuration_changed)
-        layout.addWidget(self.plot_workspace, 1)
-        self.setLayout(layout)
+        self.top_splitter.addWidget(self.left_panel_scroll)
+        self.top_splitter.addWidget(self.top_right_container)
+        self.main_splitter.addWidget(self.top_splitter)
+        self.main_splitter.addWidget(self.plot_workspace)
+        self.top_splitter.setChildrenCollapsible(False)
+        self.main_splitter.setChildrenCollapsible(False)
+        root_layout.addWidget(self.main_splitter, 1)
+        self.setLayout(root_layout)
 
-        self.populate_profile_dropdown()
         self.populate_jugglepath_dropdown()
+        self._update_pose_feedback_labels()
+        self._update_input_mode_status()
+        self._update_state_button_feedback(None)
+        self._update_link_status_indicators(self.session.latest_frame)
 
         self.live_timer = QTimer(self)
         self.live_timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -349,6 +488,7 @@ class RobotControlWindow(QWidget):
             return
         self._startup_geometry_applied = True
         self._apply_startup_geometry()
+        QTimer.singleShot(0, self._apply_initial_splitter_sizes)
 
     def _apply_startup_geometry(self) -> None:
         handle = self.windowHandle()
@@ -362,17 +502,116 @@ class RobotControlWindow(QWidget):
         height = max(1, available.height())
         self.setGeometry(left, top, width, height)
 
-    def _make_spin(self, parent_layout: QHBoxLayout, label: str, lo: float, hi: float, dec: int, step: float, suffix: str) -> QDoubleSpinBox:
-        col = QVBoxLayout()
-        col.addWidget(QLabel(label))
-        spin = QDoubleSpinBox()
+    def _apply_initial_splitter_sizes(self) -> None:
+        total_width = max(1, self.width())
+        total_height = max(1, self.height())
+        self.top_splitter.setSizes([int(total_width * 0.65), int(total_width * 0.35)])
+        self.main_splitter.setSizes([int(total_height * 0.52), int(total_height * 0.48)])
+
+    def _create_section(self, title: str) -> tuple[QGroupBox, QVBoxLayout]:
+        group = QGroupBox(title, self)
+        group_layout = QVBoxLayout(group)
+        group_layout.setContentsMargins(10, 14, 10, 10)
+        group_layout.setSpacing(8)
+        return group, group_layout
+
+    def _make_value_spin(self, lo: float, hi: float, dec: int, step: float, _unit_suffix: str) -> QDoubleSpinBox:
+        spin = SelectAllDoubleSpinBox()
         spin.setRange(lo, hi)
         spin.setDecimals(dec)
         spin.setSingleStep(step)
-        spin.setSuffix(suffix)
-        col.addWidget(spin)
-        parent_layout.addLayout(col)
+        spin.valueChanged.connect(self._update_pose_feedback_labels)
+        self._set_spin_text_width(spin, "00000")
         return spin
+
+    def _make_spin_with_unit(self, spin: QDoubleSpinBox, unit: str) -> QWidget:
+        container = QWidget(self)
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(spin)
+        layout.addWidget(QLabel(unit))
+        return container
+
+    def _set_spin_text_width(self, spin: QDoubleSpinBox, sample_text: str) -> None:
+        width = spin.fontMetrics().horizontalAdvance(sample_text) + 42
+        spin.setFixedWidth(width)
+        spin.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+    def _make_command_button(self, text: str) -> QPushButton:
+        button = QPushButton(text.upper(), self)
+        font = QFont(button.font())
+        font.setBold(True)
+        button.setFont(font)
+        button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        return button
+
+    def _make_state_command_button(self, text: str, checked_bg: str, checked_border: str) -> QPushButton:
+        button = self._make_command_button(text)
+        button.setCheckable(True)
+        button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        button.setStyleSheet(
+            f"""
+            QPushButton {{
+                padding: 6px 10px;
+            }}
+            QPushButton:checked {{
+                background-color: {checked_bg};
+                border: 2px solid {checked_border};
+                color: white;
+            }}
+            """
+        )
+        return button
+
+    def _make_toggle_command_button(self, text: str, checked_bg: str, checked_border: str) -> QPushButton:
+        button = self._make_command_button(text)
+        button.setCheckable(True)
+        button.setStyleSheet(
+            f"""
+            QPushButton {{
+                padding: 6px 10px;
+            }}
+            QPushButton:checked {{
+                background-color: {checked_bg};
+                border: 2px solid {checked_border};
+                color: white;
+            }}
+            """
+        )
+        return button
+
+    def _make_subsection_label(self, text: str) -> QLabel:
+        label = QLabel(text, self)
+        font = QFont(label.font())
+        font.setBold(True)
+        label.setFont(font)
+        return label
+
+    def _make_status_badge(self, text: str) -> QLabel:
+        label = QLabel(text, self)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setMinimumWidth(52)
+        self._set_status_badge(label, text, None)
+        return label
+
+    def _set_status_badge(self, label: QLabel, text: str, up: bool | None) -> None:
+        if up is True:
+            bg = "#15803d"
+            border = "#166534"
+            fg = "white"
+        elif up is False:
+            bg = "#b42318"
+            border = "#912018"
+            fg = "white"
+        else:
+            bg = "#98a2b3"
+            border = "#667085"
+            fg = "white"
+        label.setText(text)
+        label.setStyleSheet(
+            f"QLabel {{ background-color: {bg}; border: 1px solid {border}; border-radius: 4px; color: {fg}; padding: 2px 8px; }}"
+        )
 
     def _channel_pen(self, key: str, width: int = 2):
         channel = self.channels[key]
@@ -404,17 +643,8 @@ class RobotControlWindow(QWidget):
         self.update_plots()
 
     def check_connection_status(self) -> None:
-        if self.session.has_recent_telemetry(self.telem_timeout):
-            telem_text = "Telemetry: connected"
-        else:
-            telem_text = "Telemetry: waiting..."
-        self.status_label.setText(f"{telem_text} | {self.session.command_status}")
-
-    def _profiles_dir(self) -> str:
-        base = os.getcwd()
-        pdir = os.path.join(base, "Profiles")
-        os.makedirs(pdir, exist_ok=True)
-        return pdir
+        frame = self.session.latest_frame if self.plot_workspace.is_live_mode else self.paused_frame
+        self._update_link_status_indicators(frame)
 
     def _jugglepath_profiles_dir(self) -> Path:
         repo_root = Path(__file__).resolve().parents[3]
@@ -438,6 +668,35 @@ class RobotControlWindow(QWidget):
     def send_state(self, state_value: str) -> None:
         self.session.send_command({"type": "state", "value": state_value})
 
+    def _update_pose_feedback_labels(self, frame=None) -> None:
+        if frame is None or not hasattr(frame, "hand_cmd_pose"):
+            cmd_values = [
+                self.hand_x.value(),
+                self.hand_y.value(),
+                self.hand_z.value(),
+                self.hand_roll.value(),
+                self.hand_pitch.value(),
+            ]
+            est_values = [None] * len(cmd_values)
+        else:
+            cmd_values = frame.hand_cmd_pose[:5]
+            est_values = frame.hand_est_pose[:5]
+
+        for index, value in enumerate(cmd_values):
+            fmt = self._pose_feedback_formats[index]
+            self._set_pose_feedback_cell(index, 0, value, fmt)
+        for index, value in enumerate(est_values):
+            fmt = self._pose_feedback_formats[index]
+            self._set_pose_feedback_cell(index, 1, value, fmt)
+
+    def _update_input_mode_status(self) -> None:
+        mode = self.input_mode_combo.currentText()
+        gain = self.input_mode_gain_spin.value()
+        if self.btn_space_mouse.isChecked():
+            self.input_mode_status_label.setText(f"SpaceMouse {mode.lower()} mode active. Gain = {gain:.2f}.")
+        else:
+            self.input_mode_status_label.setText(f"Manual pose input active. SpaceMouse gain = {gain:.2f}.")
+
     def send_home(self) -> None:
         positions = [float(spin.value()) for spin in self.home_spins]
         self.session.send_command({"type": "home", "home_pos": positions, "units": "mm"})
@@ -451,72 +710,8 @@ class RobotControlWindow(QWidget):
             }
         )
 
-    def send_spool_gain_mult(self) -> None:
-        self.session.send_command(
-            {
-                "type": "spool_gain_mult",
-                "kp": float(self.spool_kp_mult_spin.value()),
-                "kd": float(self.spool_kd_mult_spin.value()),
-            }
-        )
-
-    def _load_csv_as_profile(self, path: str):
-        with open(path, "r", newline="") as file_obj:
-            rows = [row for row in csv.reader(file_obj) if any(cell.strip() for cell in row)]
-        if not rows:
-            raise ValueError("empty CSV")
-        start_idx = 0
-        try:
-            float(rows[0][0])
-        except Exception:
-            start_idx = 1
-        profile_rows = []
-        for row in rows[start_idx:]:
-            if len(row) < 7:
-                raise ValueError("each row must have at least 7 columns: time + 6 axes")
-            t_s = float(row[0])
-            axes = [float(value) for value in row[1:7]]
-            profile_rows.append([t_s] + axes)
-        times = [row[0] for row in profile_rows]
-        if any(t2 < t1 for t1, t2 in zip(times, times[1:])):
-            raise ValueError("time column must be non-decreasing")
-        return profile_rows
-
-    def _load_csv_as_pose_profile(self, path: str):
-        with open(path, "r", newline="") as file_obj:
-            rows = [row for row in csv.reader(file_obj) if any(cell.strip() for cell in row)]
-        if not rows:
-            raise ValueError("empty CSV")
-        start_idx = 0
-        try:
-            float(rows[0][0])
-        except Exception:
-            start_idx = 1
-        profile_rows = []
-        for row in rows[start_idx:]:
-            if len(row) < 7:
-                raise ValueError("each row must have at least 7 columns: time + x y z roll pitch yaw")
-            t_s = float(row[0])
-            values = [float(value) for value in row[1:7]]
-            profile_rows.append([t_s] + values)
-        times = [row[0] for row in profile_rows]
-        if any(t2 < t1 for t1, t2 in zip(times, times[1:])):
-            raise ValueError("time column must be non-decreasing")
-        return profile_rows
-
-    def populate_profile_dropdown(self) -> None:
-        pdir = self._profiles_dir()
-        csvs = sorted([name for name in os.listdir(pdir) if name.lower().endswith(".csv")])
-        self.profile_combo.clear()
-        if not csvs:
-            self.profile_combo.addItem("(no .csv files in Profiles/)")
-            self.profile_combo.setEnabled(False)
-            return
-        self.profile_combo.setEnabled(True)
-        for name in csvs:
-            self.profile_combo.addItem(name)
-
     def populate_jugglepath_dropdown(self) -> None:
+        selected = self.jp_profile_combo.currentText()
         self.jp_profile_combo.clear()
         if (
             load_profile_yaml is None
@@ -540,6 +735,10 @@ class RobotControlWindow(QWidget):
         self.jp_profile_combo.setEnabled(True)
         for path in yamls:
             self.jp_profile_combo.addItem(path.name)
+        if selected:
+            index = self.jp_profile_combo.findText(selected)
+            if index >= 0:
+                self.jp_profile_combo.setCurrentIndex(index)
 
     def on_send_start_jugglepath(self) -> None:
         if not self.jp_profile_combo.isEnabled():
@@ -557,15 +756,14 @@ class RobotControlWindow(QWidget):
 
         try:
             profile_path = self._jugglepath_profiles_dir() / name
-            rate_hz = float(self.profile_rate.value())
             traj = None
             try:
                 profile = load_profile_yaml(str(profile_path))
-                path, _cmd_hz = build_path_from_profile(profile, command_rate_hz=rate_hz)
+                path, _cmd_hz = build_path_from_profile(profile)
                 traj = path.build().traj
             except Exception:
                 pattern = load_pattern_yaml(str(profile_path))
-                traj, _cmd_hz = build_traj_from_pattern(pattern, hand="right", command_rate_hz=rate_hz, cycles=1)
+                traj, _cmd_hz = build_traj_from_pattern(pattern, hand="right", cycles=1)
             if traj is None or traj.shape[0] == 0:
                 raise ValueError("generated trajectory is empty")
 
@@ -591,31 +789,7 @@ class RobotControlWindow(QWidget):
 
             self.session.send_command({"type": "pose_profile_run", "profile": rows})
         except Exception:
-            self.status_label.setText(f"JugglePath send failed: {name}")
-
-    def on_send_profile(self) -> None:
-        if not self.profile_combo.isEnabled():
-            return
-        name = self.profile_combo.currentText()
-        if not name or name.startswith("("):
-            return
-        try:
-            path = os.path.join(self._profiles_dir(), name)
-            is_pose = self.profile_type_combo.currentIndex() == 1
-            if is_pose:
-                profile_rows = self._load_csv_as_pose_profile(path)
-                cmd = {"type": "pose_profile_upload", "profile": profile_rows}
-            else:
-                profile_rows = self._load_csv_as_profile(path)
-                cmd = {"type": "profile_upload", "profile": profile_rows, "units": "mm"}
-            self.session.send_command(cmd)
-        except Exception:
-            self.status_label.setText(f"Profile send failed: {name}")
-
-    def on_start_profile(self) -> None:
-        is_pose = self.profile_type_combo.currentIndex() == 1
-        cmd = {"type": "pose_profile_start"} if is_pose else {"type": "profile_start"}
-        self.session.send_command(cmd)
+            self.status_message_label.setText(f"JugglePath send failed: {name}")
 
     def _set_table_cell(self, row: int, col: int, value, fmt: str | None = None, tooltip: str | None = None) -> None:
         if value is None:
@@ -677,30 +851,14 @@ class RobotControlWindow(QWidget):
             frame = self.session.latest_frame
         else:
             frame = self.paused_frame
+        self._update_link_status_indicators(frame)
         if frame is None:
+            self._update_state_button_feedback(None)
+            self._status_dirty = False
             return
 
-        self.hand_est_label.setText(
-            "Pose Estimate: "
-            f"X={self._fmt(frame.hand_est_pose[0], '.1f')} mm  "
-            f"Y={self._fmt(frame.hand_est_pose[1], '.1f')} mm  "
-            f"Z={self._fmt(frame.hand_est_pose[2], '.1f')} mm  "
-            f"Roll={self._fmt(frame.hand_est_pose[3], '.2f')} deg  "
-            f"Pitch={self._fmt(frame.hand_est_pose[4], '.2f')} deg"
-        )
-
-        util_pct = 100.0 * frame.comm_stats.can_util_est if math.isfinite(frame.comm_stats.can_util_est) else float("nan")
-        p0_min_ms = 1000.0 * frame.comm_stats.pos_fbk_period0_min_s if math.isfinite(frame.comm_stats.pos_fbk_period0_min_s) else float("nan")
-        p0_max_ms = 1000.0 * frame.comm_stats.pos_fbk_period0_max_s if math.isfinite(frame.comm_stats.pos_fbk_period0_max_s) else float("nan")
-        self.comm_stats_label.setText(
-            "Comm: "
-            f"CAN rx={self._fmt(frame.comm_stats.can_rx_hz, '.1f')} Hz  "
-            f"tx={self._fmt(frame.comm_stats.can_tx_hz, '.1f')} Hz  "
-            f"total={self._fmt(frame.comm_stats.can_msg_hz, '.1f')} Hz  "
-            f"util={self._fmt(util_pct, '.1f')}%  "
-            f"pos_fbk(avg/axis)={self._fmt(frame.comm_stats.pos_fbk_hz, '.1f')} Hz  "
-            f"p0[min,max]={self._fmt(p0_min_ms, '.2f')}/{self._fmt(p0_max_ms, '.2f')} ms"
-        )
+        self._update_pose_feedback_labels(frame)
+        self._update_state_button_feedback(frame.control_state)
 
         for axis in range(6):
             state_code = frame.axis_state[axis]
@@ -727,6 +885,52 @@ class RobotControlWindow(QWidget):
 
     def _mark_status_dirty(self) -> None:
         self._status_dirty = True
+
+    def _update_state_button_feedback(self, control_state: str | None) -> None:
+        active = self._state_buttons_by_state.get(control_state or "")
+        for button in self._all_state_buttons:
+            button.setChecked(button is active)
+
+    def _set_pose_feedback_cell(self, row: int, col: int, value, fmt: str) -> None:
+        text = self._fmt(value, fmt)
+        item = self.pose_feedback_table.item(row, col)
+        if item is None:
+            item = QTableWidgetItem(text)
+            self.pose_feedback_table.setItem(row, col, item)
+        else:
+            item.setText(text)
+        item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+    def _update_link_status_indicators(self, frame) -> None:
+        tcp_up = self.session.command_status.startswith("Connected")
+        udp_up = self.session.has_recent_telemetry(self.telem_timeout)
+        self._set_status_badge(self.tcp_status_badge, "UP" if tcp_up else "DOWN", tcp_up)
+        self._set_status_badge(self.udp_status_badge, "UP" if udp_up else "DOWN", udp_up)
+        self.target_value_label.setText(self._target_text(frame))
+
+        can_up = False
+        util_pct = float("nan")
+        if frame is not None:
+            util_pct = 100.0 * frame.comm_stats.can_util_est if math.isfinite(frame.comm_stats.can_util_est) else float("nan")
+            can_up = any(
+                math.isfinite(value)
+                for value in (
+                    frame.comm_stats.can_rx_hz,
+                    frame.comm_stats.can_tx_hz,
+                    frame.comm_stats.can_msg_hz,
+                    frame.comm_stats.can_util_est,
+                )
+            )
+        self._set_status_badge(self.can_status_badge, "UP" if can_up else "DOWN", can_up)
+        self.can_util_value_label.setText(f"{self._fmt(util_pct, '.1f')}%" if can_up else "---%")
+
+    def _target_text(self, frame) -> str:
+        if frame is not None and frame.sim_time_s is not None and math.isfinite(frame.sim_time_s):
+            return "SIM"
+        host = str(self.session.config.host).strip().lower()
+        if host in {"127.0.0.1", "localhost"}:
+            return "SIM"
+        return "ROBOT"
 
     @staticmethod
     def _fmt(value, spec: str) -> str:
