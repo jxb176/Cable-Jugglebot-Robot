@@ -32,7 +32,7 @@ def test_read_sample_drains_pending_reports_and_returns_latest(monkeypatch) -> N
     monkeypatch.setattr("jugglebot.controlui.spacemouse.timeit.default_timer", lambda: 10.0)
     backend = PySpaceMouseBackend(object())
     state1 = _FakeState(x=0.1, t=9.90)
-    state2 = _FakeState(x=0.6, y=-0.2, t=9.95)
+    state2 = _FakeState(x=0.6, y=-0.2, roll=0.25, pitch=-0.4, t=9.95)
     backend._device = _FakeDevice([state1, state2, state2])
 
     sample = backend.read_sample()
@@ -40,6 +40,8 @@ def test_read_sample_drains_pending_reports_and_returns_latest(monkeypatch) -> N
     assert sample is not None
     assert sample.tx == 0.6
     assert sample.ty == -0.2
+    assert sample.rx == 0.4
+    assert sample.ry == 0.25
     assert sample.reports_drained == 2
     assert sample.device_time_s == 9.95
     assert math.isclose(sample.device_age_ms or 0.0, 50.0, rel_tol=0.0, abs_tol=1e-9)

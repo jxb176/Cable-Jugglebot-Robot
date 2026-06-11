@@ -196,8 +196,10 @@ class PySpaceMouseBackend(SpaceMouseBackend):
             tx=float(getattr(latest_state, "x", 0.0)),
             ty=float(getattr(latest_state, "y", 0.0)),
             tz=float(getattr(latest_state, "z", 0.0)),
-            rx=float(getattr(latest_state, "roll", 0.0)),
-            ry=float(getattr(latest_state, "pitch", 0.0)),
+            # The device's reported roll/pitch axes are transposed relative to the
+            # robot UI/runtime roll and pitch conventions, so swap them here.
+            rx=-float(getattr(latest_state, "pitch", 0.0)),
+            ry=float(getattr(latest_state, "roll", 0.0)),
             rz=float(getattr(latest_state, "yaw", 0.0)),
             device_time_s=latest_time_s,
             device_age_ms=device_age_ms,
