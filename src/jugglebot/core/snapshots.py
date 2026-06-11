@@ -104,9 +104,12 @@ def build_robot_state_snapshot(
     if timing is None and hasattr(state, "get_timing_stats"):
         timing = state.get_timing_stats()
     watchdog = state.get_watchdog_status() if hasattr(state, "get_watchdog_status") else None
-    control_time_s = state.get_control_time_s() if hasattr(state, "get_control_time_s") else None
-    runtime_time_s = state.get_runtime_time_s() if hasattr(state, "get_runtime_time_s") else None
-    sim_time_s, sim_rt_factor = state.get_sim_timing() if hasattr(state, "get_sim_timing") else (None, None)
+    if hasattr(state, "get_timing_state"):
+        control_time_s, runtime_time_s, sim_time_s, sim_rt_factor = state.get_timing_state()
+    else:
+        control_time_s = state.get_control_time_s() if hasattr(state, "get_control_time_s") else None
+        runtime_time_s = state.get_runtime_time_s() if hasattr(state, "get_runtime_time_s") else None
+        sim_time_s, sim_rt_factor = state.get_sim_timing() if hasattr(state, "get_sim_timing") else (None, None)
     axis_mm_per_turn = list(mm_per_turn or MM_PER_TURN)
 
     with state.lock:

@@ -70,6 +70,31 @@ def test_manual_x_range_change_switches_workspace_to_paused() -> None:
     app.processEvents()
 
 
+def test_live_render_updates_do_not_leave_auto_follow() -> None:
+    app = _app()
+    workspace = PlotWorkspace(
+        build_default_channel_registry(),
+        pen_factory=lambda _key: pg.mkPen("w"),
+        live_display_seconds=5.0,
+    )
+    workspace.show()
+    app.processEvents()
+
+    times = [0.1 * idx for idx in range(100)]
+    series = {key: [0.0 for _ in times] for key in workspace.visible_channel_keys()}
+
+    for _ in range(5):
+        workspace.render(times, series)
+        app.processEvents()
+
+    assert workspace.is_live_mode is True
+    assert workspace._x_range_mode == "auto"
+    assert workspace.mode_button.text() == "Pause View"
+
+    workspace.close()
+    app.processEvents()
+
+
 def test_legend_toggle_updates_channel_visibility() -> None:
     app = _app()
     workspace = PlotWorkspace(

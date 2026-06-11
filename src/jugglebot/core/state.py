@@ -240,6 +240,29 @@ class RuntimeMailbox:
         with self.lock:
             return self.sim_time_s, self.sim_rt_factor
 
+    def set_timing_state(
+        self,
+        *,
+        control_time_s=None,
+        runtime_time_s=None,
+        sim_time_s=None,
+        sim_rt_factor=None,
+    ):
+        with self.lock:
+            self.control_time_s = None if control_time_s is None else float(control_time_s)
+            self.runtime_time_s = None if runtime_time_s is None else float(runtime_time_s)
+            self.sim_time_s = None if sim_time_s is None else float(sim_time_s)
+            self.sim_rt_factor = None if sim_rt_factor is None else float(sim_rt_factor)
+
+    def get_timing_state(self):
+        with self.lock:
+            return (
+                self.control_time_s,
+                self.runtime_time_s,
+                self.sim_time_s,
+                self.sim_rt_factor,
+            )
+
     def set_timing_stats(self, timing_stats: TimingStats | None):
         with self.lock:
             if timing_stats is None:

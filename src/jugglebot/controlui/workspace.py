@@ -280,10 +280,9 @@ class PlotWorkspace(QWidget):
             panel.select_all_requested.connect(self._enable_plot_channels)
             panel.clear_requested.connect(self._disable_plot_channels)
             view_box = panel.plot.getPlotItem().getViewBox()
-            view_box.sigXRangeChanged.connect(
-                lambda _view_box, x_range, plot_key=plot_id: self._sync_x_range(plot_key, x_range)
+            view_box.sigRangeChangedManually.connect(
+                lambda _mask, plot_key=plot_id: self._on_manual_range_changed(plot_key)
             )
-            view_box.sigStateChanged.connect(lambda _view_box, plot_key=plot_id: self._on_view_state_changed(plot_key))
             self.plot_panels[plot_id] = panel
 
         self.apply_preset("pose")
@@ -546,24 +545,14 @@ class PlotWorkspace(QWidget):
             return
         self._shared_x_range = (x_min, x_max)
 
-    def _on_view_state_changed(self, plot_id: str) -> None:
-        if self._syncing_x_range or self._suppress_view_tracking:
-            return
-        if self._live_mode and self._x_range_mode == "auto":
-            return
+    def _on_manual_range_changed(self, plot_id: str) -> None:
         panel = self.plot_panels.get(plot_id)
         if panel is None:
             return
         current_range = panel.current_x_range()
         if current_range is None:
             return
-        if self._x_range_mode == "auto":
-            live_auto_range = self._last_auto_x_range
-            if live_auto_range is not None and _ranges_close(current_range, live_auto_range):
-                return
-        self._x_range_mode = "manual"
-        self._capture_shared_x_range(current_range)
-        self.configuration_changed.emit()
+        self._sync_x_range(plot_id, current_range)
 
     def _live_auto_x_range(self, times: list[float]) -> tuple[float, float] | None:
         if not self._live_mode or self._x_range_mode != "auto" or not times:
