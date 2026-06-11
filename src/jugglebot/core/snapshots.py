@@ -105,6 +105,8 @@ def build_robot_state_snapshot(
         timing = state.get_timing_stats()
     watchdog = state.get_watchdog_status() if hasattr(state, "get_watchdog_status") else None
     control_time_s = state.get_control_time_s() if hasattr(state, "get_control_time_s") else None
+    runtime_time_s = state.get_runtime_time_s() if hasattr(state, "get_runtime_time_s") else None
+    sim_time_s, sim_rt_factor = state.get_sim_timing() if hasattr(state, "get_sim_timing") else (None, None)
     axis_mm_per_turn = list(mm_per_turn or MM_PER_TURN)
 
     with state.lock:
@@ -144,6 +146,14 @@ def build_robot_state_snapshot(
             "pos_fbk_period0_min_s": float(state.comm_pos_fbk_period0_min_s),
             "pos_fbk_period0_max_s": float(state.comm_pos_fbk_period0_max_s),
         }
+    manual_input = (
+        state.get_manual_input_snapshot()
+        if hasattr(state, "get_manual_input_snapshot")
+        else None
+    )
+    debug_payload = dict(debug or {})
+    if manual_input is not None:
+        debug_payload["manual_input"] = manual_input
 
     actuators = []
     cable_lengths_m = []
@@ -203,6 +213,9 @@ def build_robot_state_snapshot(
         timestamp_s=timestamp_s,
         sequence_id=sequence_id,
         control_time_s=None if control_time_s is None else float(control_time_s),
+        runtime_time_s=None if runtime_time_s is None else float(runtime_time_s),
+        sim_time_s=None if sim_time_s is None else float(sim_time_s),
+        sim_rt_factor=None if sim_rt_factor is None else float(sim_rt_factor),
         control_state=control_state,
         profile_active=profile_active,
         actuators=tuple(actuators),
@@ -218,6 +231,6 @@ def build_robot_state_snapshot(
         timing=timing,
         watchdog=watchdog if isinstance(watchdog, WatchdogStatus) else None,
         bus_stats=BusStats(**comm),
-        debug=dict(debug or {}),
+        debug=debug_payload,
         valid=valid,
     )

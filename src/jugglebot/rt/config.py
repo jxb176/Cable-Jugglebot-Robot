@@ -73,8 +73,59 @@ class SpoolSpaceControllerConfig:
 
 
 @dataclass(slots=True, frozen=True)
+class ManualInputWorkspaceConfig:
+    radius_m: float
+    z_min_m: float
+    z_max_m: float
+
+
+@dataclass(slots=True, frozen=True)
+class ManualInputOrientationConfig:
+    roll_limit_deg: float
+    pitch_limit_deg: float
+
+
+@dataclass(slots=True, frozen=True)
+class ManualInputPositionModeConfig:
+    linear_xy_scale_m: float
+    linear_z_scale_m: float
+    angular_scale_deg: float
+    filter_tau_s: float
+    linear_velocity_limit_mps: float
+    angular_velocity_limit_degps: float
+
+
+@dataclass(slots=True, frozen=True)
+class ManualInputVelocityModeConfig:
+    linear_velocity_limit_mps: float
+    angular_velocity_limit_degps: float
+    linear_accel_limit_mps2: float
+    angular_accel_limit_degps2: float
+
+
+@dataclass(slots=True, frozen=True)
+class ManualInputAccelerationModeConfig:
+    linear_accel_limit_mps2: float
+    angular_accel_limit_degps2: float
+    linear_velocity_limit_mps: float
+    angular_velocity_limit_degps: float
+
+
+@dataclass(slots=True, frozen=True)
+class ManualInputConfig:
+    stream_timeout_s: float
+    deadband: float
+    workspace: ManualInputWorkspaceConfig
+    orientation: ManualInputOrientationConfig
+    position_mode: ManualInputPositionModeConfig
+    velocity_mode: ManualInputVelocityModeConfig
+    acceleration_mode: ManualInputAccelerationModeConfig
+
+
+@dataclass(slots=True, frozen=True)
 class ControllerConfig:
     spool_space: SpoolSpaceControllerConfig
+    manual_input: ManualInputConfig
 
 
 @dataclass(slots=True, frozen=True)
@@ -251,6 +302,7 @@ def parse_runtime_config(raw: dict) -> RuntimeConfig:
     axis_count = len(axis_ids)
 
     spool_space_cfg = _require_mapping(controller_cfg, "spool_space", "config.controller")
+    manual_input_cfg = _require_mapping(controller_cfg, "manual_input", "config.controller")
     outer_cfg = _require_mapping(
         spool_space_cfg,
         "outer_taskspace_correction",
@@ -266,12 +318,51 @@ def parse_runtime_config(raw: dict) -> RuntimeConfig:
         "fallback_tension",
         "config.controller.spool_space",
     )
+    manual_workspace_cfg = _require_mapping(
+        manual_input_cfg,
+        "workspace",
+        "config.controller.manual_input",
+    )
+    manual_orientation_cfg = _require_mapping(
+        manual_input_cfg,
+        "orientation",
+        "config.controller.manual_input",
+    )
+    manual_position_cfg = _require_mapping(
+        manual_input_cfg,
+        "position_mode",
+        "config.controller.manual_input",
+    )
+    manual_velocity_cfg = _require_mapping(
+        manual_input_cfg,
+        "velocity_mode",
+        "config.controller.manual_input",
+    )
+    manual_accel_cfg = _require_mapping(
+        manual_input_cfg,
+        "acceleration_mode",
+        "config.controller.manual_input",
+    )
     telemetry_udp_cfg = _require_mapping(logging_cfg, "telemetry_udp", "config.logging")
 
     tension_min_n = _require_nonnegative_float(tension_cfg, "Tmin_N", "config.tension")
     tension_max_n = _require_positive_float(tension_cfg, "Tmax_N", "config.tension")
     if tension_max_n < tension_min_n:
         raise ConfigError("config.tension.Tmax_N must be >= config.tension.Tmin_N")
+    workspace_z_min_m = _require_float(
+        manual_workspace_cfg,
+        "z_min_m",
+        "config.controller.manual_input.workspace",
+    )
+    workspace_z_max_m = _require_float(
+        manual_workspace_cfg,
+        "z_max_m",
+        "config.controller.manual_input.workspace",
+    )
+    if workspace_z_max_m <= workspace_z_min_m:
+        raise ConfigError(
+            "config.controller.manual_input.workspace.z_max_m must be > z_min_m"
+        )
 
     fallback_min_n = _require_nonnegative_float(fallback_cfg, "min_n", "config.controller.spool_space.fallback_tension")
     fallback_max_n = _require_positive_float(fallback_cfg, "max_n", "config.controller.spool_space.fallback_tension")
@@ -388,7 +479,116 @@ def parse_runtime_config(raw: dict) -> RuntimeConfig:
                         "config.controller.spool_space.nullspace_tension",
                     ),
                 ),
-            )
+            ),
+            manual_input=ManualInputConfig(
+                stream_timeout_s=_require_positive_float(
+                    manual_input_cfg,
+                    "stream_timeout_s",
+                    "config.controller.manual_input",
+                ),
+                deadband=_require_nonnegative_float(
+                    manual_input_cfg,
+                    "deadband",
+                    "config.controller.manual_input",
+                ),
+                workspace=ManualInputWorkspaceConfig(
+                    radius_m=_require_positive_float(
+                        manual_workspace_cfg,
+                        "radius_m",
+                        "config.controller.manual_input.workspace",
+                    ),
+                    z_min_m=workspace_z_min_m,
+                    z_max_m=workspace_z_max_m,
+                ),
+                orientation=ManualInputOrientationConfig(
+                    roll_limit_deg=_require_nonnegative_float(
+                        manual_orientation_cfg,
+                        "roll_limit_deg",
+                        "config.controller.manual_input.orientation",
+                    ),
+                    pitch_limit_deg=_require_nonnegative_float(
+                        manual_orientation_cfg,
+                        "pitch_limit_deg",
+                        "config.controller.manual_input.orientation",
+                    ),
+                ),
+                position_mode=ManualInputPositionModeConfig(
+                    linear_xy_scale_m=_require_positive_float(
+                        manual_position_cfg,
+                        "linear_xy_scale_m",
+                        "config.controller.manual_input.position_mode",
+                    ),
+                    linear_z_scale_m=_require_positive_float(
+                        manual_position_cfg,
+                        "linear_z_scale_m",
+                        "config.controller.manual_input.position_mode",
+                    ),
+                    angular_scale_deg=_require_nonnegative_float(
+                        manual_position_cfg,
+                        "angular_scale_deg",
+                        "config.controller.manual_input.position_mode",
+                    ),
+                    filter_tau_s=_require_nonnegative_float(
+                        manual_position_cfg,
+                        "filter_tau_s",
+                        "config.controller.manual_input.position_mode",
+                    ),
+                    linear_velocity_limit_mps=_require_positive_float(
+                        manual_position_cfg,
+                        "linear_velocity_limit_mps",
+                        "config.controller.manual_input.position_mode",
+                    ),
+                    angular_velocity_limit_degps=_require_positive_float(
+                        manual_position_cfg,
+                        "angular_velocity_limit_degps",
+                        "config.controller.manual_input.position_mode",
+                    ),
+                ),
+                velocity_mode=ManualInputVelocityModeConfig(
+                    linear_velocity_limit_mps=_require_positive_float(
+                        manual_velocity_cfg,
+                        "linear_velocity_limit_mps",
+                        "config.controller.manual_input.velocity_mode",
+                    ),
+                    angular_velocity_limit_degps=_require_positive_float(
+                        manual_velocity_cfg,
+                        "angular_velocity_limit_degps",
+                        "config.controller.manual_input.velocity_mode",
+                    ),
+                    linear_accel_limit_mps2=_require_positive_float(
+                        manual_velocity_cfg,
+                        "linear_accel_limit_mps2",
+                        "config.controller.manual_input.velocity_mode",
+                    ),
+                    angular_accel_limit_degps2=_require_positive_float(
+                        manual_velocity_cfg,
+                        "angular_accel_limit_degps2",
+                        "config.controller.manual_input.velocity_mode",
+                    ),
+                ),
+                acceleration_mode=ManualInputAccelerationModeConfig(
+                    linear_accel_limit_mps2=_require_positive_float(
+                        manual_accel_cfg,
+                        "linear_accel_limit_mps2",
+                        "config.controller.manual_input.acceleration_mode",
+                    ),
+                    angular_accel_limit_degps2=_require_positive_float(
+                        manual_accel_cfg,
+                        "angular_accel_limit_degps2",
+                        "config.controller.manual_input.acceleration_mode",
+                    ),
+                    linear_velocity_limit_mps=_require_positive_float(
+                        manual_accel_cfg,
+                        "linear_velocity_limit_mps",
+                        "config.controller.manual_input.acceleration_mode",
+                    ),
+                    angular_velocity_limit_degps=_require_positive_float(
+                        manual_accel_cfg,
+                        "angular_velocity_limit_degps",
+                        "config.controller.manual_input.acceleration_mode",
+                    ),
+                ),
+            ),
         ),
         allocation=AllocationConfig(
             backend=_require_str(allocation_cfg, "backend", "config.allocation"),

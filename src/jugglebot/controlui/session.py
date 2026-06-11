@@ -16,7 +16,8 @@ class LiveRobotSession:
         self.config = config
         self.history = history
         self.status_cb = status_cb
-        self._cmd_queue: Queue = Queue(maxsize=1)
+        self._cmd_queue: Queue = Queue()
+        self._manual_sample_queue: Queue = Queue(maxsize=1)
         self._raw_telem_queue: Queue = Queue()
         self._status_lock = threading.Lock()
         self._command_status = "TCP idle"
@@ -39,6 +40,7 @@ class LiveRobotSession:
                 self.config.host,
                 self.config.tcp_port,
                 self._cmd_queue,
+                self._manual_sample_queue,
                 status_cb=self._set_command_status,
             )
             self._command_client.start()
@@ -54,7 +56,12 @@ class LiveRobotSession:
             self._command_client = None
 
     def send_command(self, cmd: dict) -> None:
-        queue_put_latest(self._cmd_queue, cmd)
+        if not isinstance(cmd, dict):
+            return
+        if cmd.get("type") == "manual_input_sample":
+            queue_put_latest(self._manual_sample_queue, cmd)
+        else:
+            self._cmd_queue.put(cmd)
 
     def poll(self) -> int:
         updated = 0

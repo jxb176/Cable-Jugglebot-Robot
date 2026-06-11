@@ -8,6 +8,9 @@ def test_normalize_snapshot_telemetry_maps_structured_payload() -> None:
         "timestamp_s": 12.5,
         "sequence_id": 42,
         "control_time_s": 4.0,
+        "runtime_time_s": 7.5,
+        "sim_time_s": 4.0,
+        "sim_rt_factor": 0.9,
         "control_state": "enable",
         "profile_active": True,
         "cable_lengths_m": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
@@ -60,6 +63,9 @@ def test_normalize_snapshot_telemetry_maps_structured_payload() -> None:
 
     assert frame.source_id == "sim"
     assert frame.sequence_id == 42
+    assert frame.runtime_time_s == 7.5
+    assert frame.sim_time_s == 4.0
+    assert frame.sim_rt_factor == 0.9
     assert frame.control_state == "enable"
     assert frame.profile_active is True
     assert frame.pos_mm[0] == 100.0

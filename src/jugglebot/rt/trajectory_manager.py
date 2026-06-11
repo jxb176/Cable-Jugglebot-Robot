@@ -25,7 +25,9 @@ class TrajectorySample:
     pose_t_mm: tuple[float, float, float]
     pose_q: tuple[float, float, float, float]
     linear_velocity_mps: tuple[float, float, float]
+    angular_velocity_rps: tuple[float, float, float]
     linear_acceleration_mps2: tuple[float, float, float]
+    angular_acceleration_rps2: tuple[float, float, float]
     sequence_id: int | None = None
 
 
@@ -62,7 +64,9 @@ def _pose_command_to_sample(pose: PoseCommand, sequence_id: int | None) -> Traje
             math.degrees(float(pose.yaw_rad)),
         ),
         linear_velocity_mps=tuple(float(v) for v in pose.linear_velocity_mps[:3]),
+        angular_velocity_rps=tuple(float(v) for v in pose.angular_velocity_rps[:3]),
         linear_acceleration_mps2=tuple(float(v) for v in pose.linear_acceleration_mps2[:3]),
+        angular_acceleration_rps2=tuple(float(v) for v in pose.angular_acceleration_rps2[:3]),
         sequence_id=sequence_id,
     )
 
@@ -79,7 +83,9 @@ def _sample_to_pose_command(sample: TrajectorySample) -> PoseCommand:
         pitch_rad=float(pitch_rad),
         yaw_rad=float(yaw_rad),
         linear_velocity_mps=tuple(float(v) for v in sample.linear_velocity_mps),
+        angular_velocity_rps=tuple(float(v) for v in sample.angular_velocity_rps),
         linear_acceleration_mps2=tuple(float(v) for v in sample.linear_acceleration_mps2),
+        angular_acceleration_rps2=tuple(float(v) for v in sample.angular_acceleration_rps2),
     )
 
 
@@ -346,14 +352,24 @@ class TrajectoryManager:
             float(pose0.linear_velocity_mps[i]) + a * (float(pose1.linear_velocity_mps[i]) - float(pose0.linear_velocity_mps[i]))
             for i in range(3)
         )
+        ang_vel = tuple(
+            float(pose0.angular_velocity_rps[i]) + a * (float(pose1.angular_velocity_rps[i]) - float(pose0.angular_velocity_rps[i]))
+            for i in range(3)
+        )
         acc = tuple(
             float(pose0.linear_acceleration_mps2[i]) + a * (float(pose1.linear_acceleration_mps2[i]) - float(pose0.linear_acceleration_mps2[i]))
+            for i in range(3)
+        )
+        ang_acc = tuple(
+            float(pose0.angular_acceleration_rps2[i]) + a * (float(pose1.angular_acceleration_rps2[i]) - float(pose0.angular_acceleration_rps2[i]))
             for i in range(3)
         )
         return TrajectorySample(
             pose_t_mm=(1000.0 * x_m, 1000.0 * y_m, 1000.0 * z_m),
             pose_q=quat_from_rpy_deg(math.degrees(roll_rad), math.degrees(pitch_rad), math.degrees(yaw_rad)),
             linear_velocity_mps=vel,
+            angular_velocity_rps=ang_vel,
             linear_acceleration_mps2=acc,
+            angular_acceleration_rps2=ang_acc,
             sequence_id=sequence_id,
         )

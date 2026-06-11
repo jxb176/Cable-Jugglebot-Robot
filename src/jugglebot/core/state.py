@@ -84,8 +84,23 @@ class RuntimeMailbox:
         self.pose_profile = []
         self.pending_trajectory_update: TrajectoryUpdate | None = None
         self.trajectory_update_version = 0
+        self.manual_input_enabled = False
+        self.manual_input_source = "spacemouse"
+        self.manual_input_mode = "position"
+        self.manual_input_gain = 1.0
+        self.manual_input_sample = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        self.manual_input_sample_timestamp_s = None
+        self.manual_input_version = 0
+        self.manual_input_sample_version = 0
+        self.manual_input_active = False
+        self.manual_input_timed_out = False
+        self.manual_input_workspace_clipped = False
+        self.manual_input_rate_limited = False
         self.snapshot_sequence = 0
         self.control_time_s = None
+        self.runtime_time_s = None
+        self.sim_time_s = None
+        self.sim_rt_factor = None
         self.timing_stats: TimingStats | None = None
         self.watchdog_status: WatchdogStatus | None = None
 
@@ -207,6 +222,23 @@ class RuntimeMailbox:
     def get_control_time_s(self):
         with self.lock:
             return self.control_time_s
+
+    def set_runtime_time_s(self, t_s):
+        with self.lock:
+            self.runtime_time_s = None if t_s is None else float(t_s)
+
+    def get_runtime_time_s(self):
+        with self.lock:
+            return self.runtime_time_s
+
+    def set_sim_timing(self, sim_time_s=None, sim_rt_factor=None):
+        with self.lock:
+            self.sim_time_s = None if sim_time_s is None else float(sim_time_s)
+            self.sim_rt_factor = None if sim_rt_factor is None else float(sim_rt_factor)
+
+    def get_sim_timing(self):
+        with self.lock:
+            return self.sim_time_s, self.sim_rt_factor
 
     def set_timing_stats(self, timing_stats: TimingStats | None):
         with self.lock:
@@ -420,6 +452,8 @@ class RuntimeMailbox:
         with self.lock:
             self.state = value
             self.state_version += 1
+            if value != "enable":
+                self._disable_manual_input_locked()
         logger.info(f"State set to: {value} (version {self.state_version})")
 
     def get_state(self):
@@ -441,6 +475,7 @@ class RuntimeMailbox:
                 tuple(self.hand_a_mps2),
             )
             self.profile_active = False
+            self._disable_manual_input_locked()
         if player and player.is_alive():
             player.stop()
             player.join(timeout=1.0)
@@ -485,6 +520,8 @@ class RuntimeMailbox:
     def set_profile_active(self, active: bool):
         with self.lock:
             self.profile_active = bool(active)
+            if active:
+                self._disable_manual_input_locked()
 
     def get_profile_active(self):
         with self.lock:
@@ -532,6 +569,8 @@ class RuntimeMailbox:
         from jugglebot.core.types import PoseCommand, TrajectoryCommand, TrajectoryUpdate, TrajectoryUpdateMode, TrajectoryWaypoint
         from jugglebot.core.pose_utils import quat_to_rpy_rad
 
+        with self.lock:
+            self._disable_manual_input_locked()
         roll_rad, pitch_rad, yaw_rad = quat_to_rpy_rad(q)
         sequence_id = self._next_trajectory_sequence_id()
         update = TrajectoryUpdate(
@@ -577,6 +616,8 @@ class RuntimeMailbox:
     ):
         from jugglebot.core.types import PoseCommand, TrajectoryCommand, TrajectoryUpdate, TrajectoryUpdateMode, TrajectoryWaypoint
 
+        with self.lock:
+            self._disable_manual_input_locked()
         prof = self.get_pose_profile()
         if not prof:
             raise RuntimeError("no pose profile uploaded")
@@ -648,6 +689,89 @@ class RuntimeMailbox:
             f"[PRET] requested upper={self.pret_upper_N:.3f} N, lower={self.pret_lower_N:.3f} N "
             f"(pret_version {self.pret_version})"
         )
+
+    def set_manual_input_enabled(self, enabled: bool, *, source: str | None = None):
+        with self.lock:
+            if source is not None:
+                self.manual_input_source = str(source)
+            if enabled:
+                self.manual_input_enabled = True
+                self.manual_input_active = False
+                self.manual_input_timed_out = False
+                self.manual_input_workspace_clipped = False
+                self.manual_input_rate_limited = False
+                self.manual_input_version += 1
+            else:
+                self._disable_manual_input_locked()
+
+    def set_manual_input_config(self, *, mode: str | None = None, gain: float | None = None):
+        with self.lock:
+            if mode is not None:
+                normalized_mode = str(mode).lower()
+                if normalized_mode not in ("position", "velocity", "acceleration"):
+                    raise ValueError("invalid manual input mode")
+                self.manual_input_mode = normalized_mode
+            if gain is not None:
+                self.manual_input_gain = max(0.0, float(gain))
+            self.manual_input_version += 1
+
+    def submit_manual_input_sample(
+        self,
+        sample_axes,
+        *,
+        timestamp_s: float | None = None,
+    ):
+        if not isinstance(sample_axes, (list, tuple)) or len(sample_axes) != 6:
+            raise ValueError("manual input sample must be a length-6 list/tuple")
+        with self.lock:
+            self.manual_input_sample = tuple(float(v) for v in sample_axes)
+            self.manual_input_sample_timestamp_s = None if timestamp_s is None else float(timestamp_s)
+            self.manual_input_sample_version += 1
+
+    def set_manual_input_status(
+        self,
+        *,
+        active: bool | None = None,
+        timed_out: bool | None = None,
+        workspace_clipped: bool | None = None,
+        rate_limited: bool | None = None,
+    ):
+        with self.lock:
+            if active is not None:
+                self.manual_input_active = bool(active)
+            if timed_out is not None:
+                self.manual_input_timed_out = bool(timed_out)
+            if workspace_clipped is not None:
+                self.manual_input_workspace_clipped = bool(workspace_clipped)
+            if rate_limited is not None:
+                self.manual_input_rate_limited = bool(rate_limited)
+
+    def get_manual_input_snapshot(self):
+        with self.lock:
+            return {
+                "enabled": bool(self.manual_input_enabled),
+                "source": str(self.manual_input_source),
+                "mode": str(self.manual_input_mode),
+                "gain": float(self.manual_input_gain),
+                "sample": tuple(float(v) for v in self.manual_input_sample),
+                "sample_timestamp_s": None
+                if self.manual_input_sample_timestamp_s is None
+                else float(self.manual_input_sample_timestamp_s),
+                "version": int(self.manual_input_version),
+                "sample_version": int(self.manual_input_sample_version),
+                "active": bool(self.manual_input_active),
+                "timed_out": bool(self.manual_input_timed_out),
+                "workspace_clipped": bool(self.manual_input_workspace_clipped),
+                "rate_limited": bool(self.manual_input_rate_limited),
+            }
+
+    def _disable_manual_input_locked(self):
+        self.manual_input_enabled = False
+        self.manual_input_active = False
+        self.manual_input_timed_out = False
+        self.manual_input_workspace_clipped = False
+        self.manual_input_rate_limited = False
+        self.manual_input_version += 1
 
     def get_pretension(self):
         with self.lock:

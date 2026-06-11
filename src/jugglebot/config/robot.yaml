@@ -51,6 +51,33 @@ controller:
       sigma_ref_N: 0.0
       sigma_rate_limit_Nps: 10.0
       tmin_N: 5.0
+  manual_input:
+    stream_timeout_s: 0.20
+    deadband: 0.05
+    workspace:
+      radius_m: 0.18
+      z_min_m: -0.02
+      z_max_m: 0.20
+    orientation:
+      roll_limit_deg: 20.0
+      pitch_limit_deg: 20.0
+    position_mode:
+      linear_xy_scale_m: 0.08
+      linear_z_scale_m: 0.08
+      angular_scale_deg: 12.0
+      filter_tau_s: 0.12
+      linear_velocity_limit_mps: 0.20
+      angular_velocity_limit_degps: 45.0
+    velocity_mode:
+      linear_velocity_limit_mps: 0.20
+      angular_velocity_limit_degps: 45.0
+      linear_accel_limit_mps2: 1.00
+      angular_accel_limit_degps2: 170.0
+    acceleration_mode:
+      linear_accel_limit_mps2: 1.00
+      angular_accel_limit_degps2: 230.0
+      linear_velocity_limit_mps: 0.20
+      angular_velocity_limit_degps: 45.0
 
 allocation:
   backend: numpy

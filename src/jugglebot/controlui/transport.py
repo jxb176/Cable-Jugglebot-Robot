@@ -25,33 +25,39 @@ def queue_put_latest(queue: Queue, item) -> None:
 class CommandClient(threading.Thread):
     """TCP client that sends commands to the robot with auto-reconnect."""
 
-    def __init__(self, host: str, port: int, cmd_queue: Queue, status_cb=None):
+    def __init__(self, host: str, port: int, cmd_queue: Queue, manual_sample_queue: Queue, status_cb=None):
         super().__init__(daemon=True)
         self.host = host
         self.port = int(port)
         self.cmd_queue = cmd_queue
+        self.manual_sample_queue = manual_sample_queue
         self.status_cb = status_cb
         self._stop_event = threading.Event()
         self._sock = None
 
     def run(self) -> None:
-        last_cmd = None
         while not self._stop_event.is_set():
             try:
                 self._emit_status("Connecting to robot (TCP)...")
                 self._sock = socket.create_connection((self.host, self.port), timeout=5)
                 self._sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 self._emit_status("Connected (TCP)")
-                if last_cmd is not None:
-                    self._send_cmd(last_cmd)
 
                 while not self._stop_event.is_set():
                     try:
-                        cmd = self.cmd_queue.get(timeout=0.2)
-                    except Empty:
+                        cmd = self.cmd_queue.get(timeout=0.02)
+                        self._send_cmd(cmd)
                         continue
-                    last_cmd = cmd
-                    self._send_cmd(cmd)
+                    except Empty:
+                        pass
+                    manual_sample = None
+                    try:
+                        while True:
+                            manual_sample = self.manual_sample_queue.get_nowait()
+                    except Empty:
+                        pass
+                    if manual_sample is not None:
+                        self._send_cmd(manual_sample)
             except Exception as exc:
                 if not self._stop_event.is_set():
                     self._emit_status(f"TCP disconnected: {exc}. Reconnecting in 1s...")

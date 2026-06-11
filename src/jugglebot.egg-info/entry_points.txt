@@ -1,3 +1,9 @@
 [console_scripts]
+bsplineui = jugglebot.apps.bsplineui:main
+controlui = jugglebot.apps.controlui:main
+patternui = jugglebot.apps.patternui:main
+plantraj = jugglebot.apps.plantraj:main
+playtraj = jugglebot.apps.playtraj:main
+reviewlog = jugglebot.apps.reviewlog:main
 robotd = jugglebot.apps.robotd:main
 simd = jugglebot.apps.simd:main

@@ -30,6 +30,7 @@ from jugglebot.core.tension_control import TensionAllocatorConfig, platform_wren
 from jugglebot.core.units import mm_to_turns
 from jugglebot.rt.clock import WallClock
 from jugglebot.rt.config import RuntimeConfig, parse_runtime_config
+from jugglebot.rt.manual_input import ManualInputController
 from jugglebot.rt.state_machine import RuntimeMode, RuntimeStateMachine, RuntimeTransitionAction
 from jugglebot.rt.trajectory_manager import TrajectoryManager
 from jugglebot.rt.watchdog import RuntimeWatchdog, WatchdogSample
@@ -159,6 +160,7 @@ class ControlBridge(threading.Thread):
         self._diag_log_path = None
         self._diag_start_perf = None
         self._diag_last_log_perf = 0.0
+        self._runtime_start_perf = None
         self._last_spool_cmd_mm = [float("nan")] * 6
         self._last_spool_pose_cmd_mm = [float("nan")] * 6
         self._last_spool_null_cmd_mm = [0.0] * 6
@@ -291,6 +293,7 @@ class ControlBridge(threading.Thread):
         )
         self._state_machine = RuntimeStateMachine.from_mailbox(self.state, self.axis_ids)
         self._trajectory_manager = TrajectoryManager()
+        self._manual_input_controller = ManualInputController(self.runtime_config.controller.manual_input)
         self._watchdog = RuntimeWatchdog(
             status_report_period_s=float(self.runtime_config.rt.status_report_period_s),
             deadline_warning_margin_s=1e-3 * float(self.runtime_config.rt.deadline_warning_margin_ms),
@@ -424,6 +427,7 @@ class ControlBridge(threading.Thread):
             # Start the driver
             self.driver.start()
             self._open_diag_log()
+            self._runtime_start_perf = self._clock.now_monotonic()
 
             # main loop at configured control rate
             while not self._stop.is_set():
@@ -447,15 +451,25 @@ class ControlBridge(threading.Thread):
                 sm_result = self._state_machine.step(self.state)
                 st = sm_result.mode.value
                 self._execute_state_machine_actions(sm_result)
+                self._update_runtime_timing(loop_start_perf)
                 self._update_sim_timing(loop_start_perf)
                 control_now_s = self._sim_time_s if np.isfinite(self._sim_time_s) else loop_start_perf
                 self._trajectory_manager.consume_mailbox_updates(self.state, float(control_now_s))
                 trajectory_sample, trajectory_status = self._trajectory_manager.sample(float(control_now_s))
+                trajectory_sample, _manual_input_status = self._manual_input_controller.step(
+                    self.state,
+                    now_control_s=float(control_now_s),
+                    now_perf_s=loop_start_perf,
+                    base_sample=trajectory_sample,
+                    allow_streaming=bool(sm_result.allow_taskspace_streaming),
+                )
                 self.state.set_commanded_motion_sample(
                     trajectory_sample.pose_t_mm,
                     trajectory_sample.pose_q,
                     v_mps=trajectory_sample.linear_velocity_mps,
                     a_mps2=trajectory_sample.linear_acceleration_mps2,
+                    w_rps=trajectory_sample.angular_velocity_rps,
+                    alpha_rps2=trajectory_sample.angular_acceleration_rps2,
                 )
                 self.state.set_profile_active(trajectory_status.profile_active)
 
@@ -806,11 +820,18 @@ class ControlBridge(threading.Thread):
             self._diag_writer = None
             self._diag_row_keys = None
 
+    def _update_runtime_timing(self, now_perf):
+        if self._runtime_start_perf is None:
+            self._runtime_start_perf = float(now_perf)
+        runtime_time_s = max(0.0, float(now_perf) - float(self._runtime_start_perf))
+        self.state.set_runtime_time_s(runtime_time_s)
+        self.state.set_control_time_s(runtime_time_s)
+
     def _update_sim_timing(self, now_perf):
         self._sim_time_s = float("nan")
         self._sim_rt_factor = float("nan")
         if not hasattr(self.driver, "get_sim_time"):
-            self.state.set_control_time_s(None)
+            self.state.set_sim_timing(None, None)
             self._sim_time_prev = None
             self._sim_wall_prev = None
             return
@@ -819,7 +840,7 @@ class ControlBridge(threading.Thread):
         except Exception:
             sim_time = None
         if sim_time is None:
-            self.state.set_control_time_s(None)
+            self.state.set_sim_timing(None, None)
             self._sim_time_prev = None
             self._sim_wall_prev = None
             return
@@ -834,6 +855,7 @@ class ControlBridge(threading.Thread):
                 self._sim_rt_factor = ds / dw
         self._sim_time_prev = sim_time
         self._sim_wall_prev = float(now_perf)
+        self.state.set_sim_timing(sim_time, None if not np.isfinite(self._sim_rt_factor) else self._sim_rt_factor)
 
     def _write_diag_row(self, now_perf):
         if self._diag_writer is None:

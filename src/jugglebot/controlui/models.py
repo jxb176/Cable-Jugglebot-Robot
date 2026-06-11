@@ -28,7 +28,9 @@ class TelemetryFrame:
     receipt_time_s: float
     wall_time_s: float
     control_time_s: float | None
+    runtime_time_s: float | None
     sim_time_s: float | None
+    sim_rt_factor: float | None
     sequence_id: int | None
     control_state: str | None
     profile_active: bool
@@ -189,15 +191,21 @@ def _normalize_legacy_payload(payload: Mapping[str, object], source_id: str, rec
     control_time_s = _float_or_none(payload.get("control_time_s"))
     if control_time_s is None:
         control_time_s = _float_or_none(debug.get("control_time_s"))
+    runtime_time_s = _float_or_none(payload.get("runtime_time_s"))
+    if runtime_time_s is None:
+        runtime_time_s = _float_or_none(debug.get("runtime_time_s"))
     sim_time_s = _float_or_none(debug.get("sim_time_s"))
-    if sim_time_s is None and control_time_s is not None and math.isfinite(control_time_s):
-        sim_time_s = control_time_s
+    sim_rt_factor = _float_or_none(payload.get("sim_rt_factor"))
+    if sim_rt_factor is None:
+        sim_rt_factor = _float_or_none(debug.get("sim_rt_factor"))
     return TelemetryFrame(
         source_id=source_id,
         receipt_time_s=receipt_time_s,
         wall_time_s=_float_or_none(payload.get("t")) or receipt_time_s,
         control_time_s=control_time_s,
+        runtime_time_s=runtime_time_s,
         sim_time_s=sim_time_s,
+        sim_rt_factor=sim_rt_factor,
         sequence_id=_int_or_none(payload.get("sequence_id")),
         control_state=str(payload.get("control_state")) if payload.get("control_state") is not None else None,
         profile_active=bool(payload.get("profile_active", False)),
@@ -241,15 +249,23 @@ def _normalize_snapshot_payload(payload: Mapping[str, object], source_id: str, r
     control_time_s = _float_or_none(payload.get("control_time_s"))
     if control_time_s is None:
         control_time_s = _float_or_none(debug.get("control_time_s"))
-    sim_time_s = _float_or_none(debug.get("sim_time_s"))
-    if sim_time_s is None and control_time_s is not None and math.isfinite(control_time_s):
-        sim_time_s = control_time_s
+    runtime_time_s = _float_or_none(payload.get("runtime_time_s"))
+    if runtime_time_s is None:
+        runtime_time_s = _float_or_none(debug.get("runtime_time_s"))
+    sim_time_s = _float_or_none(payload.get("sim_time_s"))
+    if sim_time_s is None:
+        sim_time_s = _float_or_none(debug.get("sim_time_s"))
+    sim_rt_factor = _float_or_none(payload.get("sim_rt_factor"))
+    if sim_rt_factor is None:
+        sim_rt_factor = _float_or_none(debug.get("sim_rt_factor"))
     return TelemetryFrame(
         source_id=source_id,
         receipt_time_s=receipt_time_s,
         wall_time_s=_float_or_none(payload.get("timestamp_s")) or receipt_time_s,
         control_time_s=control_time_s,
+        runtime_time_s=runtime_time_s,
         sim_time_s=sim_time_s,
+        sim_rt_factor=sim_rt_factor,
         sequence_id=_int_or_none(payload.get("sequence_id")),
         control_state=str(payload.get("control_state")) if payload.get("control_state") is not None else None,
         profile_active=bool(payload.get("profile_active", False)),

@@ -215,6 +215,9 @@ class RobotState(ModelBase):
     timestamp_s: float
     sequence_id: int
     control_time_s: float | None = None
+    runtime_time_s: float | None = None
+    sim_time_s: float | None = None
+    sim_rt_factor: float | None = None
     control_state: str = "unknown"
     profile_active: bool = False
     actuators: tuple[ActuatorState, ...] = ()

@@ -29,6 +29,7 @@ import pyqtgraph as pg
 from .channels import STYLE_DASH, ChannelRegistry, build_default_channel_registry
 from .history import HistorySnapshot, TelemetryHistory
 from .session import LiveRobotSession
+from .spacemouse import create_spacemouse_backend
 from .workspace import PlotWorkspace
 try:
     from .view3d import Robot3DView
@@ -97,6 +98,7 @@ LIVE_VIEW_INTERVAL_MS = 33
 PLOT_VIEW_INTERVAL_MS = 100
 STATUS_VIEW_INTERVAL_MS = 200
 CONNECTION_STATUS_INTERVAL_MS = 500
+SPACEMOUSE_POLL_INTERVAL_MS = 20
 
 
 class SelectAllDoubleSpinBox(QDoubleSpinBox):
@@ -153,6 +155,7 @@ class RobotControlWindow(QWidget):
         self._plots_dirty = True
         self._status_dirty = True
         self._startup_geometry_applied = False
+        self._spacemouse_backend = create_spacemouse_backend()
 
         self.setWindowTitle("Robot Controller + Telemetry")
         self.resize(1400, 1050)
@@ -193,6 +196,8 @@ class RobotControlWindow(QWidget):
         self.can_status_badge = self._make_status_badge("DOWN")
         self.target_value_label = QLabel("ROBOT")
         self.can_util_value_label = QLabel("---%")
+        self.runtime_time_value_label = QLabel("--- s")
+        self.sim_time_value_label = QLabel("--- s")
         self.status_message_label = QLabel("")
         self.status_message_label.setWordWrap(True)
         link_grid.addWidget(QLabel("TCP"), 0, 0)
@@ -205,6 +210,10 @@ class RobotControlWindow(QWidget):
         link_grid.addWidget(self.can_status_badge, 1, 3)
         link_grid.addWidget(QLabel("Util"), 1, 4)
         link_grid.addWidget(self.can_util_value_label, 1, 5)
+        link_grid.addWidget(QLabel("Runtime"), 2, 0)
+        link_grid.addWidget(self.runtime_time_value_label, 2, 1)
+        link_grid.addWidget(QLabel("Sim Time"), 2, 2)
+        link_grid.addWidget(self.sim_time_value_label, 2, 3)
         robot_state_layout.addLayout(link_grid)
         robot_state_layout.addWidget(self._make_subsection_label("Pose Feedback"))
 
@@ -331,7 +340,7 @@ class RobotControlWindow(QWidget):
         space_mouse_layout.setSpacing(6)
         space_mouse_layout.addWidget(self._make_subsection_label("SpaceMouse"))
         self.btn_space_mouse = self._make_toggle_command_button("SpaceMouse", "#7c3aed", "#6d28d9")
-        self.btn_space_mouse.toggled.connect(self._update_input_mode_status)
+        self.btn_space_mouse.toggled.connect(self._on_space_mouse_toggled)
         space_mouse_layout.addWidget(self.btn_space_mouse, alignment=Qt.AlignmentFlag.AlignLeft)
         space_mouse_layout.addWidget(QLabel("Mode"))
         self.input_mode_combo = QComboBox()
@@ -342,7 +351,7 @@ class RobotControlWindow(QWidget):
                 "Acceleration",
             ]
         )
-        self.input_mode_combo.currentIndexChanged.connect(self._update_input_mode_status)
+        self.input_mode_combo.currentIndexChanged.connect(self._on_space_mouse_config_changed)
         space_mouse_layout.addWidget(self.input_mode_combo)
         gain_row = QHBoxLayout()
         gain_row.addWidget(QLabel("Sensitivity"))
@@ -351,7 +360,7 @@ class RobotControlWindow(QWidget):
         self.input_mode_gain_spin.setRange(0.05, 20.0)
         self.input_mode_gain_spin.setSingleStep(0.05)
         self.input_mode_gain_spin.setValue(1.0)
-        self.input_mode_gain_spin.valueChanged.connect(self._update_input_mode_status)
+        self.input_mode_gain_spin.valueChanged.connect(self._on_space_mouse_config_changed)
         gain_row.addWidget(self.input_mode_gain_spin)
         space_mouse_layout.addLayout(gain_row)
         self.input_mode_status_label = QLabel()
@@ -481,6 +490,10 @@ class RobotControlWindow(QWidget):
         self.conn_timer = QTimer(self)
         self.conn_timer.timeout.connect(self.check_connection_status)
         self.conn_timer.start(CONNECTION_STATUS_INTERVAL_MS)
+
+        self.spacemouse_timer = QTimer(self)
+        self.spacemouse_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self.spacemouse_timer.timeout.connect(self._poll_spacemouse)
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
@@ -654,6 +667,7 @@ class RobotControlWindow(QWidget):
         return Path(os.getcwd()) / "src" / "jugglebot" / "profiles"
 
     def send_pose(self) -> None:
+        self._deactivate_spacemouse()
         self.session.send_command(
             {
                 "type": "pose",
@@ -666,6 +680,8 @@ class RobotControlWindow(QWidget):
         )
 
     def send_state(self, state_value: str) -> None:
+        if str(state_value).lower() != "enable":
+            self._deactivate_spacemouse()
         self.session.send_command({"type": "state", "value": state_value})
 
     def _update_pose_feedback_labels(self, frame=None) -> None:
@@ -693,15 +709,112 @@ class RobotControlWindow(QWidget):
         mode = self.input_mode_combo.currentText()
         gain = self.input_mode_gain_spin.value()
         if self.btn_space_mouse.isChecked():
-            self.input_mode_status_label.setText(f"SpaceMouse {mode.lower()} mode active. Gain = {gain:.2f}.")
+            self.input_mode_status_label.setText(
+                f"SpaceMouse {mode.lower()} mode active. Gain = {gain:.2f}. {self._spacemouse_backend.status_text()}"
+            )
         else:
-            self.input_mode_status_label.setText(f"Manual pose input active. SpaceMouse gain = {gain:.2f}.")
+            self.input_mode_status_label.setText(
+                f"Manual pose input active. SpaceMouse gain = {gain:.2f}. {self._spacemouse_backend.status_text()}"
+            )
+
+    def _manual_input_mode(self) -> str:
+        return self.input_mode_combo.currentText().strip().lower()
+
+    def _send_manual_input_config(self) -> None:
+        self.session.send_command(
+            {
+                "type": "manual_input_config",
+                "mode": self._manual_input_mode(),
+                "gain": float(self.input_mode_gain_spin.value()),
+            }
+        )
+
+    def _on_space_mouse_config_changed(self) -> None:
+        self._update_input_mode_status()
+        self._send_manual_input_config()
+
+    def _on_space_mouse_toggled(self, enabled: bool) -> None:
+        if enabled:
+            if not self._spacemouse_backend.is_available():
+                self.btn_space_mouse.blockSignals(True)
+                self.btn_space_mouse.setChecked(False)
+                self.btn_space_mouse.blockSignals(False)
+                self._update_input_mode_status()
+                return
+            try:
+                self._spacemouse_backend.open()
+            except Exception as exc:
+                self.btn_space_mouse.blockSignals(True)
+                self.btn_space_mouse.setChecked(False)
+                self.btn_space_mouse.blockSignals(False)
+                self.input_mode_status_label.setText(f"SpaceMouse failed to open: {exc}")
+                return
+            self._send_manual_input_config()
+            self.session.send_command(
+                {
+                    "type": "manual_input_enable",
+                    "enabled": True,
+                    "source": "spacemouse",
+                }
+            )
+            self.spacemouse_timer.start(SPACEMOUSE_POLL_INTERVAL_MS)
+        else:
+            self.spacemouse_timer.stop()
+            self._spacemouse_backend.close()
+            self.session.send_command(
+                {
+                    "type": "manual_input_enable",
+                    "enabled": False,
+                    "source": "spacemouse",
+                }
+            )
+        self._update_input_mode_status()
+
+    def _deactivate_spacemouse(self) -> None:
+        if self.btn_space_mouse.isChecked():
+            self.btn_space_mouse.setChecked(False)
+        else:
+            self.spacemouse_timer.stop()
+            self._spacemouse_backend.close()
+            self.session.send_command(
+                {
+                    "type": "manual_input_enable",
+                    "enabled": False,
+                    "source": "spacemouse",
+                }
+            )
+            self._update_input_mode_status()
+
+    def _poll_spacemouse(self) -> None:
+        if not self.btn_space_mouse.isChecked():
+            return
+        try:
+            sample = self._spacemouse_backend.read_sample()
+        except Exception as exc:
+            self.input_mode_status_label.setText(f"SpaceMouse read failed: {exc}")
+            self._deactivate_spacemouse()
+            return
+        if sample is None:
+            return
+        self.session.send_command(
+            {
+                "type": "manual_input_sample",
+                "tx": float(sample.tx),
+                "ty": float(sample.ty),
+                "tz": float(sample.tz),
+                "rx": float(sample.rx),
+                "ry": float(sample.ry),
+                "rz": float(sample.rz),
+            }
+        )
 
     def send_home(self) -> None:
+        self._deactivate_spacemouse()
         positions = [float(spin.value()) for spin in self.home_spins]
         self.session.send_command({"type": "home", "home_pos": positions, "units": "mm"})
 
     def send_pretension(self) -> None:
+        self._deactivate_spacemouse()
         self.session.send_command(
             {
                 "type": "pretension",
@@ -753,6 +866,7 @@ class RobotControlWindow(QWidget):
             or build_traj_from_pattern is None
         ):
             return
+        self._deactivate_spacemouse()
 
         try:
             profile_path = self._jugglepath_profiles_dir() / name
@@ -907,6 +1021,9 @@ class RobotControlWindow(QWidget):
         self._set_status_badge(self.tcp_status_badge, "UP" if tcp_up else "DOWN", tcp_up)
         self._set_status_badge(self.udp_status_badge, "UP" if udp_up else "DOWN", udp_up)
         self.target_value_label.setText(self._target_text(frame))
+        self.runtime_time_value_label.setText(self._fmt_time_s(None if frame is None else frame.runtime_time_s))
+        sim_time_text = self._fmt_time_s(None if frame is None else frame.sim_time_s)
+        self.sim_time_value_label.setText(sim_time_text if self._is_sim_frame(frame) else "--- s")
 
         can_up = False
         util_pct = float("nan")
@@ -925,12 +1042,17 @@ class RobotControlWindow(QWidget):
         self.can_util_value_label.setText(f"{self._fmt(util_pct, '.1f')}%" if can_up else "---%")
 
     def _target_text(self, frame) -> str:
-        if frame is not None and frame.sim_time_s is not None and math.isfinite(frame.sim_time_s):
+        if self._is_sim_frame(frame):
+            if frame is not None and frame.sim_rt_factor is not None and math.isfinite(frame.sim_rt_factor):
+                return f"SIM ({self._fmt(frame.sim_rt_factor, '.2f')}x)"
             return "SIM"
         host = str(self.session.config.host).strip().lower()
         if host in {"127.0.0.1", "localhost"}:
             return "SIM"
         return "ROBOT"
+
+    def _is_sim_frame(self, frame) -> bool:
+        return bool(frame is not None and frame.sim_time_s is not None and math.isfinite(frame.sim_time_s))
 
     @staticmethod
     def _fmt(value, spec: str) -> str:
@@ -939,6 +1061,10 @@ class RobotControlWindow(QWidget):
             return format(numeric, spec) if math.isfinite(numeric) else "---"
         except Exception:
             return "---"
+
+    def _fmt_time_s(self, value) -> str:
+        text = self._fmt(value, ".1f")
+        return f"{text} s" if text != "---" else "--- s"
 
     @staticmethod
     def _axis_state_text(state_code) -> str:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import socket
+import time
 
 from jugglebot.core.pose_utils import quat_from_rpy_deg
 from jugglebot.core.types import TrajectoryUpdateMode
@@ -90,6 +91,29 @@ def tcp_command_server(state):
                                 mode=update_mode,
                                 effective_time_s=None if effective_time_s is None else float(effective_time_s),
                                 preserve_continuity=preserve_continuity,
+                            )
+                        elif mtype == "manual_input_enable":
+                            state.set_manual_input_enabled(
+                                bool(msg.get("enabled", False)),
+                                source=msg.get("source"),
+                            )
+                        elif mtype == "manual_input_config":
+                            state.set_manual_input_config(
+                                mode=msg.get("mode"),
+                                gain=None if msg.get("gain") is None else float(msg.get("gain")),
+                            )
+                        elif mtype == "manual_input_sample":
+                            sample_axes = (
+                                float(msg.get("tx", 0.0)),
+                                float(msg.get("ty", 0.0)),
+                                float(msg.get("tz", 0.0)),
+                                float(msg.get("rx", 0.0)),
+                                float(msg.get("ry", 0.0)),
+                                float(msg.get("rz", 0.0)),
+                            )
+                            state.submit_manual_input_sample(
+                                sample_axes,
+                                timestamp_s=time.monotonic(),
                             )
                         elif mtype == "pose_profile_upload":
                             profile = msg.get("profile", [])

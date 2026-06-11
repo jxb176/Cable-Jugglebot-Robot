@@ -39,6 +39,9 @@ optimization = [
 hardware = [
     "python-can>=4.0",
 ]
+spacemouse = [
+    "pyspacemouse>=2.0",
+]
 
 # Command line entry points
 [project.scripts]

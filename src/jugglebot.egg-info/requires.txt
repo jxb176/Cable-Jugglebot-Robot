@@ -7,9 +7,20 @@ ruff
 black
 mypy
 
+[gui]
+PyQt6>=6.6
+pyqtgraph>=0.13
+PyOpenGL>=3.1
+
+[hardware]
+python-can>=4.0
+
 [optimization]
 osqp
 
 [sim]
 mujoco
 matplotlib
+
+[spacemouse]
+pyspacemouse>=2.0
