@@ -29,7 +29,7 @@ import pyqtgraph as pg
 from .channels import STYLE_DASH, ChannelRegistry, build_default_channel_registry
 from .history import HistorySnapshot, TelemetryHistory
 from .session import LiveRobotSession
-from .spacemouse import create_spacemouse_backend
+from .spacemouse import SpaceMouseWorker, create_spacemouse_backend
 from .workspace import PlotWorkspace
 try:
     from .view3d import Robot3DView
@@ -156,6 +156,8 @@ class RobotControlWindow(QWidget):
         self._status_dirty = True
         self._startup_geometry_applied = False
         self._spacemouse_backend = create_spacemouse_backend()
+        self._last_spacemouse_sample = None
+        self._spacemouse_worker: SpaceMouseWorker | None = None
 
         self.setWindowTitle("Robot Controller + Telemetry")
         self.resize(1400, 1050)
@@ -366,6 +368,10 @@ class RobotControlWindow(QWidget):
         self.input_mode_status_label = QLabel()
         self.input_mode_status_label.setWordWrap(True)
         space_mouse_layout.addWidget(self.input_mode_status_label)
+        self.spacemouse_input_label = QLabel()
+        self.spacemouse_input_label.setWordWrap(True)
+        self.spacemouse_input_label.setStyleSheet("font-family: monospace;")
+        space_mouse_layout.addWidget(self.spacemouse_input_label)
         space_mouse_layout.addStretch(1)
         command_inputs_row.addLayout(space_mouse_layout, 1)
 
@@ -471,6 +477,7 @@ class RobotControlWindow(QWidget):
         self.populate_jugglepath_dropdown()
         self._update_pose_feedback_labels()
         self._update_input_mode_status()
+        self._update_spacemouse_sample_display(None)
         self._update_state_button_feedback(None)
         self._update_link_status_indicators(self.session.latest_frame)
 
@@ -717,6 +724,39 @@ class RobotControlWindow(QWidget):
                 f"Manual pose input active. SpaceMouse gain = {gain:.2f}. {self._spacemouse_backend.status_text()}"
             )
 
+    def _update_spacemouse_sample_display(self, sample) -> None:
+        self._last_spacemouse_sample = sample
+        if sample is None:
+            values = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            age_text = "---"
+            drained = 0
+            poll_text = "---"
+        else:
+            values = (
+                float(sample.tx),
+                float(sample.ty),
+                float(sample.tz),
+                float(sample.rx),
+                float(sample.ry),
+                float(sample.rz),
+            )
+            device_time_s = getattr(sample, "device_time_s", None)
+            if device_time_s is None:
+                age_text = self._fmt(getattr(sample, "device_age_ms", None), ".1f")
+            else:
+                try:
+                    import timeit
+                    age_text = self._fmt(1000.0 * max(0.0, timeit.default_timer() - float(device_time_s)), ".1f")
+                except Exception:
+                    age_text = self._fmt(getattr(sample, "device_age_ms", None), ".1f")
+            drained = max(0, int(getattr(sample, "reports_drained", 0)))
+            poll_text = self._fmt(getattr(sample, "poll_interval_ms", None), ".1f")
+        self.spacemouse_input_label.setText(
+            "TX {:+.3f}  TY {:+.3f}  TZ {:+.3f}\n"
+            "RX {:+.3f}  RY {:+.3f}  RZ {:+.3f}\n"
+            "POLL {} ms  AGE {} ms  DRAIN {}".format(*values, poll_text, age_text, drained)
+        )
+
     def _manual_input_mode(self) -> str:
         return self.input_mode_combo.currentText().strip().lower()
 
@@ -733,6 +773,19 @@ class RobotControlWindow(QWidget):
         self._update_input_mode_status()
         self._send_manual_input_config()
 
+    def _send_spacemouse_sample(self, sample) -> None:
+        self.session.send_command(
+            {
+                "type": "manual_input_sample",
+                "tx": float(sample.tx),
+                "ty": float(sample.ty),
+                "tz": float(sample.tz),
+                "rx": float(sample.rx),
+                "ry": float(sample.ry),
+                "rz": float(sample.rz),
+            }
+        )
+
     def _on_space_mouse_toggled(self, enabled: bool) -> None:
         if enabled:
             if not self._spacemouse_backend.is_available():
@@ -748,7 +801,10 @@ class RobotControlWindow(QWidget):
                 self.btn_space_mouse.setChecked(False)
                 self.btn_space_mouse.blockSignals(False)
                 self.input_mode_status_label.setText(f"SpaceMouse failed to open: {exc}")
+                self._update_spacemouse_sample_display(None)
                 return
+            self._spacemouse_worker = SpaceMouseWorker(self._spacemouse_backend, sample_cb=self._send_spacemouse_sample)
+            self._spacemouse_worker.start()
             self._send_manual_input_config()
             self.session.send_command(
                 {
@@ -760,7 +816,12 @@ class RobotControlWindow(QWidget):
             self.spacemouse_timer.start(SPACEMOUSE_POLL_INTERVAL_MS)
         else:
             self.spacemouse_timer.stop()
+            if self._spacemouse_worker is not None:
+                self._spacemouse_worker.stop()
+                self._spacemouse_worker.join(timeout=0.5)
+                self._spacemouse_worker = None
             self._spacemouse_backend.close()
+            self._update_spacemouse_sample_display(None)
             self.session.send_command(
                 {
                     "type": "manual_input_enable",
@@ -775,7 +836,12 @@ class RobotControlWindow(QWidget):
             self.btn_space_mouse.setChecked(False)
         else:
             self.spacemouse_timer.stop()
+            if self._spacemouse_worker is not None:
+                self._spacemouse_worker.stop()
+                self._spacemouse_worker.join(timeout=0.5)
+                self._spacemouse_worker = None
             self._spacemouse_backend.close()
+            self._update_spacemouse_sample_display(None)
             self.session.send_command(
                 {
                     "type": "manual_input_enable",
@@ -788,25 +854,19 @@ class RobotControlWindow(QWidget):
     def _poll_spacemouse(self) -> None:
         if not self.btn_space_mouse.isChecked():
             return
-        try:
-            sample = self._spacemouse_backend.read_sample()
-        except Exception as exc:
-            self.input_mode_status_label.setText(f"SpaceMouse read failed: {exc}")
+        worker = self._spacemouse_worker
+        if worker is None:
+            return
+        error_text = worker.latest_error()
+        if error_text:
+            self.input_mode_status_label.setText(f"SpaceMouse read failed: {error_text}")
+            self._update_spacemouse_sample_display(None)
             self._deactivate_spacemouse()
             return
+        sample = worker.latest_sample()
         if sample is None:
             return
-        self.session.send_command(
-            {
-                "type": "manual_input_sample",
-                "tx": float(sample.tx),
-                "ty": float(sample.ty),
-                "tz": float(sample.tz),
-                "rx": float(sample.rx),
-                "ry": float(sample.ry),
-                "rz": float(sample.rz),
-            }
-        )
+        self._update_spacemouse_sample_display(sample)
 
     def send_home(self) -> None:
         self._deactivate_spacemouse()

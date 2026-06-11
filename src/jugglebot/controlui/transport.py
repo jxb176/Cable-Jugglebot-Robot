@@ -44,18 +44,17 @@ class CommandClient(threading.Thread):
                 self._emit_status("Connected (TCP)")
 
                 while not self._stop_event.is_set():
+                    manual_sample = self._drain_manual_sample()
+                    if manual_sample is not None:
+                        self._send_cmd(manual_sample)
+                        continue
                     try:
-                        cmd = self.cmd_queue.get(timeout=0.02)
+                        cmd = self.cmd_queue.get(timeout=0.005)
                         self._send_cmd(cmd)
                         continue
                     except Empty:
                         pass
-                    manual_sample = None
-                    try:
-                        while True:
-                            manual_sample = self.manual_sample_queue.get_nowait()
-                    except Empty:
-                        pass
+                    manual_sample = self._drain_manual_sample()
                     if manual_sample is not None:
                         self._send_cmd(manual_sample)
             except Exception as exc:
@@ -74,6 +73,15 @@ class CommandClient(threading.Thread):
             return
         msg = json.dumps(cmd_value) + "\n"
         self._sock.sendall(msg.encode("utf-8"))
+
+    def _drain_manual_sample(self):
+        manual_sample = None
+        try:
+            while True:
+                manual_sample = self.manual_sample_queue.get_nowait()
+        except Empty:
+            pass
+        return manual_sample
 
     def _close(self) -> None:
         try:

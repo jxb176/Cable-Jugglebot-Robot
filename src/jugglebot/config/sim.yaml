@@ -64,10 +64,10 @@ controller:
     position_mode:
       linear_xy_scale_m: 0.08
       linear_z_scale_m: 0.08
-      angular_scale_deg: 12.0
-      filter_tau_s: 0.12
-      linear_velocity_limit_mps: 1.0
-      angular_velocity_limit_degps: 45.0
+      angular_scale_deg: 15.0
+      filter_tau_s: 0.05
+      linear_velocity_limit_mps: 2.0
+      angular_velocity_limit_degps: 200.0
     velocity_mode:
       linear_velocity_limit_mps: 1.0
       angular_velocity_limit_degps: 45.0
