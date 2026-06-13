@@ -100,6 +100,13 @@ STATUS_VIEW_INTERVAL_MS = 200
 CONNECTION_STATUS_INTERVAL_MS = 500
 SPACEMOUSE_POLL_INTERVAL_MS = 20
 
+HOMING_MODE_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("Manual", "manual"),
+    ("Homing Prep", "homing_prep"),
+    ("Z-axis Zero", "z_axis_zero"),
+    ("XY-axis Zero", "xy_axis_zero"),
+)
+
 
 class SelectAllDoubleSpinBox(QDoubleSpinBox):
     def focusInEvent(self, event) -> None:
@@ -287,7 +294,14 @@ class RobotControlWindow(QWidget):
 
         home_inputs_layout = QVBoxLayout()
         home_inputs_layout.setSpacing(6)
-        home_inputs_layout.addWidget(self._make_subsection_label("Home Spool Position"))
+        home_inputs_layout.addWidget(self._make_subsection_label("Homing"))
+        home_inputs_layout.addWidget(QLabel("Mode"))
+        self.homing_mode_combo = QComboBox()
+        for label, value in HOMING_MODE_OPTIONS:
+            self.homing_mode_combo.addItem(label, value)
+        home_inputs_layout.addWidget(self.homing_mode_combo)
+        self.home_spool_label = QLabel("Manual Home Spool Position [mm]")
+        home_inputs_layout.addWidget(self.home_spool_label)
         self.home_spins = []
         home_grid = QGridLayout()
         home_grid.setHorizontalSpacing(8)
@@ -305,6 +319,22 @@ class RobotControlWindow(QWidget):
             home_grid.addWidget(QLabel(f"A{axis + 1}"), axis, 0)
             home_grid.addWidget(spin, axis, 1)
         home_inputs_layout.addLayout(home_grid)
+        homing_button_row = QHBoxLayout()
+        homing_button_row.setSpacing(8)
+        self.btn_homing_run = self._make_command_button("Run Homing")
+        self.btn_homing_cancel = self._make_command_button("Cancel Homing")
+        self.btn_homing_apply = self._make_command_button("Apply Result")
+        self.btn_homing_run.clicked.connect(self.send_homing_run)
+        self.btn_homing_cancel.clicked.connect(self.send_homing_cancel)
+        self.btn_homing_apply.clicked.connect(self.send_homing_apply)
+        homing_button_row.addWidget(self.btn_homing_run)
+        homing_button_row.addWidget(self.btn_homing_cancel)
+        homing_button_row.addWidget(self.btn_homing_apply)
+        home_inputs_layout.addLayout(homing_button_row)
+        self.homing_status_label = QLabel()
+        self.homing_status_label.setWordWrap(True)
+        self.homing_status_label.setStyleSheet("font-family: monospace;")
+        home_inputs_layout.addWidget(self.homing_status_label)
         home_inputs_layout.addStretch(1)
         command_inputs_row.addLayout(home_inputs_layout, 1)
 
@@ -388,6 +418,7 @@ class RobotControlWindow(QWidget):
         self.btn_home.clicked.connect(self.send_home)
         self.btn_enable.clicked.connect(lambda: self.send_state("enable"))
         self.btn_estop.clicked.connect(lambda: self.send_state("estop"))
+        self.homing_mode_combo.currentIndexChanged.connect(self._on_homing_mode_changed)
 
         self._state_buttons_by_state = {
             "disable": self.btn_disable,
@@ -478,6 +509,7 @@ class RobotControlWindow(QWidget):
         self._update_pose_feedback_labels()
         self._update_input_mode_status()
         self._update_spacemouse_sample_display(None)
+        self._update_homing_controls(None)
         self._update_state_button_feedback(None)
         self._update_link_status_indicators(self.session.latest_frame)
 
@@ -873,6 +905,18 @@ class RobotControlWindow(QWidget):
         positions = [float(spin.value()) for spin in self.home_spins]
         self.session.send_command({"type": "home", "home_pos": positions, "units": "mm"})
 
+    def send_homing_run(self) -> None:
+        self._deactivate_spacemouse()
+        self.session.send_command({"type": "homing_run", "mode": self._selected_homing_mode()})
+
+    def send_homing_cancel(self) -> None:
+        self._deactivate_spacemouse()
+        self.session.send_command({"type": "homing_cancel"})
+
+    def send_homing_apply(self) -> None:
+        self._deactivate_spacemouse()
+        self.session.send_command({"type": "homing_apply"})
+
     def send_pretension(self) -> None:
         self._deactivate_spacemouse()
         self.session.send_command(
@@ -1027,12 +1071,14 @@ class RobotControlWindow(QWidget):
             frame = self.paused_frame
         self._update_link_status_indicators(frame)
         if frame is None:
+            self._update_homing_controls(None)
             self._update_state_button_feedback(None)
             self._status_dirty = False
             return
 
         self._update_pose_feedback_labels(frame)
         self._update_state_button_feedback(frame.control_state)
+        self._update_homing_controls(frame)
 
         for axis in range(6):
             state_code = frame.axis_state[axis]
@@ -1064,6 +1110,105 @@ class RobotControlWindow(QWidget):
         active = self._state_buttons_by_state.get(control_state or "")
         for button in self._all_state_buttons:
             button.setChecked(button is active)
+
+    def _selected_homing_mode(self) -> str:
+        mode = self.homing_mode_combo.currentData()
+        return "manual" if mode is None else str(mode)
+
+    def _set_homing_mode_selection(self, mode: str) -> None:
+        index = self.homing_mode_combo.findData(str(mode))
+        if index < 0 or index == self.homing_mode_combo.currentIndex():
+            return
+        self.homing_mode_combo.blockSignals(True)
+        self.homing_mode_combo.setCurrentIndex(index)
+        self.homing_mode_combo.blockSignals(False)
+
+    def _on_homing_mode_changed(self, _index: int | None = None) -> None:
+        self._update_homing_controls(None)
+        self.session.send_command({"type": "homing_select", "mode": self._selected_homing_mode()})
+
+    def _update_homing_controls(self, frame) -> None:
+        homing = {} if frame is None else dict(getattr(frame, "homing", {}) or {})
+        selected_mode = str(homing.get("selected_mode", self._selected_homing_mode()))
+        self._set_homing_mode_selection(selected_mode)
+        current_mode = self._selected_homing_mode()
+        is_manual = current_mode == "manual"
+        homing_state = str(homing.get("state", "idle"))
+        result_available = bool(homing.get("result_available", False))
+        routine_active = homing_state == "running"
+        self.home_spool_label.setEnabled(is_manual)
+        for spin in self.home_spins:
+            spin.setEnabled(is_manual and not routine_active)
+        self.btn_home.setEnabled(is_manual and not routine_active)
+        self.btn_homing_run.setEnabled((not is_manual) and (not routine_active))
+        self.btn_homing_cancel.setEnabled(routine_active)
+        self.btn_homing_apply.setEnabled(result_available and not routine_active)
+        self.homing_status_label.setText(self._format_homing_status_text(homing))
+
+    def _format_homing_status_text(self, homing: dict[str, object]) -> str:
+        selected_mode = self._homing_mode_label(str(homing.get("selected_mode", self._selected_homing_mode())))
+        active_mode_raw = homing.get("active_mode")
+        active_mode = None if active_mode_raw is None else self._homing_mode_label(str(active_mode_raw))
+        state = str(homing.get("state", "idle"))
+        phase = str(homing.get("phase", "idle"))
+        progress = homing.get("progress")
+        run_id = homing.get("run_id", 0)
+        accepted = homing.get("accepted_samples", 0)
+        rejected = homing.get("rejected_samples", 0)
+        result_available = bool(homing.get("result_available", False))
+        fitted_offset = homing.get("fitted_offset_mm")
+        candidate_home = homing.get("candidate_home_pos_mm")
+        residual_rms_mm = homing.get("residual_rms_mm")
+        message = homing.get("message")
+        failure_reason = homing.get("failure_reason")
+        status_lines = [
+            f"MODE {selected_mode}",
+            f"STATE {state.upper()}  PHASE {phase}",
+        ]
+        if active_mode is not None:
+            status_lines.append(f"ACTIVE {active_mode}  RUN {int(run_id) if run_id is not None else 0}")
+        show_progress = (
+            progress is not None
+            and (
+                state != "idle"
+                or int(accepted or 0) > 0
+                or int(rejected or 0) > 0
+            )
+        )
+        if show_progress:
+            progress_text = self._fmt(100.0 * float(progress), ".1f")
+            status_lines.append(
+                f"PROGRESS {progress_text}%  ACCEPTED {int(accepted or 0)}  REJECTED {int(rejected or 0)}"
+            )
+        if message:
+            status_lines.append(str(message))
+        if failure_reason:
+            status_lines.append(f"REASON {failure_reason}")
+        if result_available:
+            fit_text = self._format_homing_axis_tuple(fitted_offset)
+            candidate_text = self._format_homing_axis_tuple(candidate_home)
+            status_lines.append(f"FIT {fit_text}")
+            status_lines.append(f"HOME {candidate_text}")
+            if residual_rms_mm is not None:
+                status_lines.append(f"RMS {self._fmt(residual_rms_mm, '.4f')} mm")
+        if not message and not failure_reason and state == "idle":
+            status_lines.append("Manual HOME remains available in Manual mode.")
+        return "\n".join(status_lines)
+
+    @staticmethod
+    def _homing_mode_label(mode: str) -> str:
+        for label, value in HOMING_MODE_OPTIONS:
+            if value == str(mode):
+                return label
+        return str(mode)
+
+    def _format_homing_axis_tuple(self, values) -> str:
+        if not isinstance(values, (list, tuple)) or len(values) < 6:
+            return "---"
+        return " ".join(
+            f"A{index + 1}={self._fmt(values[index], '.3f')}"
+            for index in range(6)
+        )
 
     def _set_pose_feedback_cell(self, row: int, col: int, value, fmt: str) -> None:
         text = self._fmt(value, fmt)

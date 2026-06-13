@@ -154,6 +154,7 @@ def build_robot_state_snapshot(
         if hasattr(state, "get_manual_input_snapshot")
         else None
     )
+    homing = state.get_homing_status() if hasattr(state, "get_homing_status") else None
     debug_payload = dict(debug or {})
     if manual_input is not None:
         debug_payload["manual_input"] = manual_input
@@ -234,6 +235,7 @@ def build_robot_state_snapshot(
         timing=timing,
         watchdog=watchdog if isinstance(watchdog, WatchdogStatus) else None,
         bus_stats=BusStats(**comm),
+        homing=homing,
         debug=debug_payload,
         valid=valid,
     )

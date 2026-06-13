@@ -19,3 +19,14 @@ def test_snapshot_uses_atomic_timing_state() -> None:
     assert snapshot.runtime_time_s == 21.0
     assert snapshot.sim_time_s == 12.5
     assert snapshot.sim_rt_factor == 0.8
+
+
+def test_snapshot_includes_homing_status() -> None:
+    state = RuntimeMailbox()
+    state.request_homing_mode("z_axis_zero")
+
+    snapshot = build_robot_state_snapshot(state, timestamp_s=101.0, sequence_id=8)
+
+    assert snapshot.homing is not None
+    assert snapshot.homing.selected_mode.value == "z_axis_zero"
+    assert snapshot.homing.state == "idle"

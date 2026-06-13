@@ -30,6 +30,7 @@ from jugglebot.core.tension_control import TensionAllocatorConfig, platform_wren
 from jugglebot.core.units import mm_to_turns
 from jugglebot.rt.clock import WallClock
 from jugglebot.rt.config import RuntimeConfig, parse_runtime_config
+from jugglebot.rt.homing import HomingRoutineManager
 from jugglebot.rt.manual_input import ManualInputController
 from jugglebot.rt.state_machine import RuntimeMode, RuntimeStateMachine, RuntimeTransitionAction
 from jugglebot.rt.trajectory_manager import TrajectoryManager
@@ -294,6 +295,13 @@ class ControlBridge(threading.Thread):
         self._state_machine = RuntimeStateMachine.from_mailbox(self.state, self.axis_ids)
         self._trajectory_manager = TrajectoryManager()
         self._manual_input_controller = ManualInputController(self.runtime_config.controller.manual_input)
+        self._homing_manager = HomingRoutineManager(
+            self.runtime_config.homing,
+            axis_ids=self.axis_ids,
+            mm_per_turn=self._mm_per_turn,
+            home_cable_mm=HOME_CABLE_MM,
+            geometry=GEOM,
+        )
         self._watchdog = RuntimeWatchdog(
             status_report_period_s=float(self.runtime_config.rt.status_report_period_s),
             deadline_warning_margin_s=1e-3 * float(self.runtime_config.rt.deadline_warning_margin_ms),
@@ -483,11 +491,12 @@ class ControlBridge(threading.Thread):
                 observer_start_perf = self._clock.now_monotonic()
                 q_cur, qd_cur, j_cur = self._set_platform_estimate_from_feedback(actuator_states)
                 observer_duration_s = max(0.0, self._clock.now_monotonic() - observer_start_perf)
+                supports_taskspace_controller = self._supports_position_command_with_ff()
 
                 # Stream setpoints if enabled
                 if sm_result.allow_taskspace_streaming:
                     try:
-                        if self._supports_position_command_with_ff():
+                        if supports_taskspace_controller:
                             commands = self._run_taskspace_spool_control(
                                 trajectory_sample=trajectory_sample,
                                 q_cur=q_cur,
@@ -577,6 +586,27 @@ class ControlBridge(threading.Thread):
                     )
                 )
                 self.state.set_watchdog_status(watchdog_eval.status)
+                self._homing_manager.tick(
+                    self.state,
+                    now_perf_s=now,
+                    runtime_mode=st,
+                    allow_taskspace_streaming=bool(sm_result.allow_taskspace_streaming),
+                    supports_taskspace_controller=bool(supports_taskspace_controller),
+                    q_cur=q_cur,
+                    qd_cur=qd_cur,
+                    actuator_states=actuator_states,
+                    tension_cmd_n=tuple(float(x) for x in self._last_tension_cmd_N),
+                    tension_rsp_n=tuple(
+                        float(x) if x is not None else float("nan")
+                        for x in self.state.get_axis_tension_response()
+                    ),
+                    sigma_ref_n=float(self._last_sigma_ref),
+                    sigma_meas_n=float(self._last_sigma_meas),
+                    eta_null_m=float(self._last_eta_null_m),
+                    spool_null_cmd_mm=tuple(float(x) for x in self._last_spool_null_cmd_mm),
+                    watchdog_status=watchdog_eval.status,
+                    profile_active=trajectory_status.profile_active,
+                )
                 read_ms = 1000.0 * read_duration_s
                 observer_ms = 1000.0 * observer_duration_s
                 traj_ms = (

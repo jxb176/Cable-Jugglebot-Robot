@@ -74,6 +74,14 @@ def tcp_command_server(state):
                         elif mtype == "home":
                             home_mm = coerce_vec6_to_mm(msg, "home_pos")
                             state.request_home(home_mm)
+                        elif mtype == "homing_select":
+                            state.request_homing_mode(msg.get("mode", "manual"))
+                        elif mtype == "homing_run":
+                            state.request_homing_run(msg.get("mode"))
+                        elif mtype == "homing_cancel":
+                            state.request_homing_cancel()
+                        elif mtype == "homing_apply":
+                            state.request_homing_apply()
                         elif mtype == "pose":
                             x = float(msg.get("x_mm", 0.0))
                             y = float(msg.get("y_mm", 0.0))

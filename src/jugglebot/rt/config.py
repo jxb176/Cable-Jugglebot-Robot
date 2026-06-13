@@ -123,6 +123,53 @@ class ManualInputConfig:
 
 
 @dataclass(slots=True, frozen=True)
+class HomingSettleConfig:
+    min_dwell_s: float
+    timeout_s: float
+    pose_tol_mm: float
+    vel_tol_mmps: float
+    tension_tol_n: float
+    sigma_err_tol_n: float
+    null_cmd_tol_mm: float
+
+
+@dataclass(slots=True, frozen=True)
+class HomingPrepConfig:
+    enabled: bool
+    speed_mps: float
+    dwell_s: float
+    cycles: int
+    z_levels_mm: tuple[float, ...]
+    radius_mm: float
+
+
+@dataclass(slots=True, frozen=True)
+class ZAxisZeroConfig:
+    points_mm: tuple[float, ...]
+    x_mm: float
+    y_mm: float
+
+
+@dataclass(slots=True, frozen=True)
+class XYAxisZeroConfig:
+    radius_mm: float
+    point_count: int
+    start_angle_deg: float
+    z_levels_mm: tuple[float, ...]
+
+
+@dataclass(slots=True, frozen=True)
+class HomingConfig:
+    auto_apply: bool
+    require_tension_feedback: bool
+    require_taskspace_controller: bool
+    settle: HomingSettleConfig
+    prep: HomingPrepConfig
+    z_axis_zero: ZAxisZeroConfig
+    xy_axis_zero: XYAxisZeroConfig
+
+
+@dataclass(slots=True, frozen=True)
 class ControllerConfig:
     spool_space: SpoolSpaceControllerConfig
     manual_input: ManualInputConfig
@@ -192,6 +239,7 @@ class RuntimeConfig:
     geometry: GeometryConfig
     tension: TensionConfig
     controller: ControllerConfig
+    homing: HomingConfig
     allocation: AllocationConfig
     estimator: EstimatorConfig
     hardware: HardwareConfig
@@ -271,6 +319,16 @@ def _require_float_sequence(data: dict, key: str, path: str, length: int) -> tup
         raise ConfigError(f"Config value must be numeric: {path}.{key}") from exc
 
 
+def _require_nonempty_float_sequence(data: dict, key: str, path: str) -> tuple[float, ...]:
+    value = data.get(key)
+    if not isinstance(value, (list, tuple)) or len(value) == 0:
+        raise ConfigError(f"Config value must be a non-empty list: {path}.{key}")
+    try:
+        return tuple(float(v) for v in value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"Config value must be numeric: {path}.{key}") from exc
+
+
 def _require_int_sequence(data: dict, key: str, path: str) -> tuple[int, ...]:
     value = data.get(key)
     if not isinstance(value, (list, tuple)) or len(value) == 0:
@@ -290,6 +348,7 @@ def parse_runtime_config(raw: dict) -> RuntimeConfig:
     geometry_cfg = _require_mapping(raw, "geometry", "config")
     tension_cfg = _require_mapping(raw, "tension", "config")
     controller_cfg = _require_mapping(raw, "controller", "config")
+    homing_cfg = _require_mapping(raw, "homing", "config")
     allocation_cfg = _require_mapping(raw, "allocation", "config")
     estimator_cfg = _require_mapping(raw, "estimator", "config")
     hardware_cfg = _require_mapping(raw, "hardware", "config")
@@ -343,6 +402,10 @@ def parse_runtime_config(raw: dict) -> RuntimeConfig:
         "acceleration_mode",
         "config.controller.manual_input",
     )
+    homing_settle_cfg = _require_mapping(homing_cfg, "settle", "config.homing")
+    homing_prep_cfg = _require_mapping(homing_cfg, "prep", "config.homing")
+    homing_z_axis_cfg = _require_mapping(homing_cfg, "z_axis_zero", "config.homing")
+    homing_xy_axis_cfg = _require_mapping(homing_cfg, "xy_axis_zero", "config.homing")
     telemetry_udp_cfg = _require_mapping(logging_cfg, "telemetry_udp", "config.logging")
 
     tension_min_n = _require_nonnegative_float(tension_cfg, "Tmin_N", "config.tension")
@@ -370,6 +433,24 @@ def parse_runtime_config(raw: dict) -> RuntimeConfig:
         raise ConfigError(
             "config.controller.spool_space.fallback_tension.max_n must be >= min_n"
         )
+
+    homing_timeout_s = _require_positive_float(homing_settle_cfg, "timeout_s", "config.homing.settle")
+    homing_min_dwell_s = _require_nonnegative_float(homing_settle_cfg, "min_dwell_s", "config.homing.settle")
+    if homing_timeout_s < homing_min_dwell_s:
+        raise ConfigError("config.homing.settle.timeout_s must be >= min_dwell_s")
+
+    homing_prep_cycles = _require_positive_int(homing_prep_cfg, "cycles", "config.homing.prep")
+    homing_z_points_mm = _require_nonempty_float_sequence(homing_z_axis_cfg, "points_mm", "config.homing.z_axis_zero")
+    homing_xy_z_levels_mm = _require_nonempty_float_sequence(
+        homing_xy_axis_cfg,
+        "z_levels_mm",
+        "config.homing.xy_axis_zero",
+    )
+    homing_prep_z_levels_mm = _require_nonempty_float_sequence(
+        homing_prep_cfg,
+        "z_levels_mm",
+        "config.homing.prep",
+    )
 
     wrench_sign = _require_float(allocation_cfg, "wrench_from_tension_sign", "config.allocation")
     if wrench_sign not in (-1.0, 1.0):
@@ -588,6 +669,91 @@ def parse_runtime_config(raw: dict) -> RuntimeConfig:
                         "config.controller.manual_input.acceleration_mode",
                     ),
                 ),
+            ),
+        ),
+        homing=HomingConfig(
+            auto_apply=_require_bool(homing_cfg, "auto_apply", "config.homing"),
+            require_tension_feedback=_require_bool(
+                homing_cfg,
+                "require_tension_feedback",
+                "config.homing",
+            ),
+            require_taskspace_controller=_require_bool(
+                homing_cfg,
+                "require_taskspace_controller",
+                "config.homing",
+            ),
+            settle=HomingSettleConfig(
+                min_dwell_s=homing_min_dwell_s,
+                timeout_s=homing_timeout_s,
+                pose_tol_mm=_require_nonnegative_float(
+                    homing_settle_cfg,
+                    "pose_tol_mm",
+                    "config.homing.settle",
+                ),
+                vel_tol_mmps=_require_nonnegative_float(
+                    homing_settle_cfg,
+                    "vel_tol_mmps",
+                    "config.homing.settle",
+                ),
+                tension_tol_n=_require_nonnegative_float(
+                    homing_settle_cfg,
+                    "tension_tol_n",
+                    "config.homing.settle",
+                ),
+                sigma_err_tol_n=_require_nonnegative_float(
+                    homing_settle_cfg,
+                    "sigma_err_tol_n",
+                    "config.homing.settle",
+                ),
+                null_cmd_tol_mm=_require_nonnegative_float(
+                    homing_settle_cfg,
+                    "null_cmd_tol_mm",
+                    "config.homing.settle",
+                ),
+            ),
+            prep=HomingPrepConfig(
+                enabled=_require_bool(homing_prep_cfg, "enabled", "config.homing.prep"),
+                speed_mps=_require_positive_float(
+                    homing_prep_cfg,
+                    "speed_mps",
+                    "config.homing.prep",
+                ),
+                dwell_s=_require_nonnegative_float(
+                    homing_prep_cfg,
+                    "dwell_s",
+                    "config.homing.prep",
+                ),
+                cycles=homing_prep_cycles,
+                z_levels_mm=homing_prep_z_levels_mm,
+                radius_mm=_require_nonnegative_float(
+                    homing_prep_cfg,
+                    "radius_mm",
+                    "config.homing.prep",
+                ),
+            ),
+            z_axis_zero=ZAxisZeroConfig(
+                points_mm=homing_z_points_mm,
+                x_mm=_require_float(homing_z_axis_cfg, "x_mm", "config.homing.z_axis_zero"),
+                y_mm=_require_float(homing_z_axis_cfg, "y_mm", "config.homing.z_axis_zero"),
+            ),
+            xy_axis_zero=XYAxisZeroConfig(
+                radius_mm=_require_nonnegative_float(
+                    homing_xy_axis_cfg,
+                    "radius_mm",
+                    "config.homing.xy_axis_zero",
+                ),
+                point_count=_require_positive_int(
+                    homing_xy_axis_cfg,
+                    "point_count",
+                    "config.homing.xy_axis_zero",
+                ),
+                start_angle_deg=_require_float(
+                    homing_xy_axis_cfg,
+                    "start_angle_deg",
+                    "config.homing.xy_axis_zero",
+                ),
+                z_levels_mm=homing_xy_z_levels_mm,
             ),
         ),
         allocation=AllocationConfig(

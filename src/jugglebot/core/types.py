@@ -53,6 +53,19 @@ class TrajectoryUpdateMode(str, Enum):
     SPLICE_NEXT_CYCLE = "splice_next_cycle"
 
 
+class HomingMode(str, Enum):
+    MANUAL = "manual"
+    HOMING_PREP = "homing_prep"
+    Z_AXIS_ZERO = "z_axis_zero"
+    XY_AXIS_ZERO = "xy_axis_zero"
+
+
+class HomingAction(str, Enum):
+    RUN = "run"
+    CANCEL = "cancel"
+    APPLY = "apply"
+
+
 class FaultSeverity(str, Enum):
     NONE = "none"
     WARNING = "warning"
@@ -168,6 +181,47 @@ class TrajectoryUpdate(ModelBase):
 
 
 @dataclass(slots=True)
+class HomingCommand(ModelBase):
+    action: HomingAction
+    mode: HomingMode | None = None
+    source_timestamp_s: float | None = None
+
+
+@dataclass(slots=True)
+class HomingStatus(ModelBase):
+    selected_mode: HomingMode = HomingMode.MANUAL
+    active_mode: HomingMode | None = None
+    state: str = "idle"
+    phase: str = "idle"
+    progress: float = 0.0
+    run_id: int = 0
+    total_points: int = 0
+    completed_points: int = 0
+    accepted_samples: int = 0
+    rejected_samples: int = 0
+    result_available: bool = False
+    fitted_offset_mm: tuple[float, ...] = (
+        float("nan"),
+        float("nan"),
+        float("nan"),
+        float("nan"),
+        float("nan"),
+        float("nan"),
+    )
+    candidate_home_pos_mm: tuple[float, ...] = (
+        float("nan"),
+        float("nan"),
+        float("nan"),
+        float("nan"),
+        float("nan"),
+        float("nan"),
+    )
+    residual_rms_mm: float = float("nan")
+    message: str | None = None
+    failure_reason: str | None = None
+
+
+@dataclass(slots=True)
 class TimingStats(ModelBase):
     loop_period_s: float | None = None
     read_duration_s: float | None = None
@@ -233,5 +287,6 @@ class RobotState(ModelBase):
     timing: TimingStats | None = None
     watchdog: WatchdogStatus | None = None
     bus_stats: BusStats | None = None
+    homing: HomingStatus | None = None
     debug: dict[str, object] = field(default_factory=dict)
     valid: bool = True

@@ -7,6 +7,10 @@ import threading
 
 from jugglebot.core.cable_ik import q_norm
 from jugglebot.core.types import (
+    HomingAction,
+    HomingCommand,
+    HomingMode,
+    HomingStatus,
     RuntimeHealthLevel,
     TimingStats,
     TrajectoryUpdate,
@@ -25,6 +29,36 @@ def _clone_watchdog_status(watchdog_status: WatchdogStatus | None):
     level = data.get("level", RuntimeHealthLevel.HEALTHY.value)
     data["level"] = RuntimeHealthLevel(level)
     return WatchdogStatus(**data)
+
+
+def _clone_homing_status(homing_status: HomingStatus | None):
+    if homing_status is None:
+        return None
+    data = homing_status.to_dict()
+    selected_mode = data.get("selected_mode", HomingMode.MANUAL.value)
+    active_mode = data.get("active_mode")
+    data["selected_mode"] = HomingMode(selected_mode)
+    data["active_mode"] = None if active_mode is None else HomingMode(active_mode)
+    candidate = data.get("candidate_home_pos_mm", ())
+    if not isinstance(candidate, (list, tuple)) or len(candidate) != 6:
+        candidate = (float("nan"),) * 6
+    data["candidate_home_pos_mm"] = tuple(float(v) for v in candidate)
+    fitted_offset = data.get("fitted_offset_mm", ())
+    if not isinstance(fitted_offset, (list, tuple)) or len(fitted_offset) != 6:
+        fitted_offset = (float("nan"),) * 6
+    data["fitted_offset_mm"] = tuple(float(v) for v in fitted_offset)
+    return HomingStatus(**data)
+
+
+def _clone_homing_command(homing_command: HomingCommand | None):
+    if homing_command is None:
+        return None
+    data = homing_command.to_dict()
+    action = data.get("action", HomingAction.RUN.value)
+    mode = data.get("mode")
+    data["action"] = HomingAction(action)
+    data["mode"] = None if mode is None else HomingMode(mode)
+    return HomingCommand(**data)
 
 
 class RuntimeMailbox:
@@ -96,6 +130,9 @@ class RuntimeMailbox:
         self.manual_input_timed_out = False
         self.manual_input_workspace_clipped = False
         self.manual_input_rate_limited = False
+        self.pending_homing_command: HomingCommand | None = None
+        self.homing_command_version = 0
+        self.homing_status = HomingStatus()
         self.snapshot_sequence = 0
         self.control_time_s = None
         self.runtime_time_s = None
@@ -321,6 +358,81 @@ class RuntimeMailbox:
     def get_home_pos(self):
         with self.lock:
             return list(self.home_pos)
+
+    def request_homing_mode(self, mode):
+        mode_enum = HomingMode(str(mode).lower())
+        with self.lock:
+            current = _clone_homing_status(self.homing_status) or HomingStatus()
+            current.selected_mode = mode_enum
+            if current.state != "running":
+                current.active_mode = None
+                current.state = "idle"
+                current.phase = "idle"
+                current.progress = 0.0
+                current.total_points = 0
+                current.completed_points = 0
+                current.accepted_samples = 0
+                current.rejected_samples = 0
+                current.result_available = False
+                current.fitted_offset_mm = (float("nan"),) * 6
+                current.candidate_home_pos_mm = (float("nan"),) * 6
+                current.residual_rms_mm = float("nan")
+                current.message = None
+                current.failure_reason = None
+            self.homing_status = current
+        logger.info(f"[HOMING] selected mode={mode_enum.value}")
+
+    def request_homing_run(self, mode=None):
+        mode_enum = None if mode is None else HomingMode(str(mode).lower())
+        with self.lock:
+            current = _clone_homing_status(self.homing_status) or HomingStatus()
+            if mode_enum is not None:
+                current.selected_mode = mode_enum
+                self.homing_status = current
+            self.pending_homing_command = HomingCommand(
+                action=HomingAction.RUN,
+                mode=mode_enum,
+            )
+            self.homing_command_version += 1
+        logger.info(
+            "[HOMING] run requested"
+            + ("" if mode_enum is None else f" mode={mode_enum.value}")
+            + f" (version {self.homing_command_version})"
+        )
+
+    def request_homing_cancel(self):
+        with self.lock:
+            self.pending_homing_command = HomingCommand(action=HomingAction.CANCEL)
+            self.homing_command_version += 1
+        logger.info(f"[HOMING] cancel requested (version {self.homing_command_version})")
+
+    def request_homing_apply(self):
+        with self.lock:
+            self.pending_homing_command = HomingCommand(action=HomingAction.APPLY)
+            self.homing_command_version += 1
+        logger.info(f"[HOMING] apply requested (version {self.homing_command_version})")
+
+    def get_pending_homing_command(self):
+        with self.lock:
+            return _clone_homing_command(self.pending_homing_command)
+
+    def take_pending_homing_command(self):
+        with self.lock:
+            command = _clone_homing_command(self.pending_homing_command)
+            self.pending_homing_command = None
+            return command
+
+    def get_homing_command_version(self):
+        with self.lock:
+            return int(self.homing_command_version)
+
+    def set_homing_status(self, homing_status: HomingStatus | None):
+        with self.lock:
+            self.homing_status = HomingStatus() if homing_status is None else _clone_homing_status(homing_status)
+
+    def get_homing_status(self):
+        with self.lock:
+            return _clone_homing_status(self.homing_status)
 
     def set_axis_feedback(
         self,

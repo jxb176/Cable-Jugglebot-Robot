@@ -56,6 +56,13 @@ def test_normalize_snapshot_telemetry_maps_structured_payload() -> None:
             "pos_fbk_period0_min_s": 0.001,
             "pos_fbk_period0_max_s": 0.002,
         },
+        "homing": {
+            "selected_mode": "z_axis_zero",
+            "active_mode": "z_axis_zero",
+            "state": "failed",
+            "phase": "pending_implementation",
+            "failure_reason": "not_implemented",
+        },
         "debug": {"sim_time_s": 4.0},
     }
 
@@ -79,6 +86,8 @@ def test_normalize_snapshot_telemetry_maps_structured_payload() -> None:
     assert frame.hand_est_acc[1] == 5000.0
     assert frame.axis_state[0] == 8
     assert frame.comm_stats.can_msg_hz == 150.0
+    assert frame.homing["selected_mode"] == "z_axis_zero"
+    assert frame.homing["failure_reason"] == "not_implemented"
     assert frame.preferred_time_s() == 4.0
 
 

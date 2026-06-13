@@ -79,6 +79,35 @@ controller:
       linear_velocity_limit_mps: 1.0
       angular_velocity_limit_degps: 45.0
 
+homing:
+  auto_apply: false
+  require_tension_feedback: true
+  require_taskspace_controller: true
+  settle:
+    min_dwell_s: 1.5
+    timeout_s: 8.0
+    pose_tol_mm: 2.0
+    vel_tol_mmps: 3.0
+    tension_tol_n: 1.0
+    sigma_err_tol_n: 1.0
+    null_cmd_tol_mm: 2.0
+  prep:
+    enabled: true
+    speed_mps: 0.05
+    dwell_s: 0.25
+    cycles: 2
+    z_levels_mm: [-150.0, 0.0, 150.0]
+    radius_mm: 150.0
+  z_axis_zero:
+    points_mm: [-200.0, -100.0, 0.0, 100.0, 200.0]
+    x_mm: 0.0
+    y_mm: 0.0
+  xy_axis_zero:
+    radius_mm: 100.0
+    point_count: 6
+    start_angle_deg: 0.0
+    z_levels_mm: [200.0, 0.0, -200.0]
+
 allocation:
   backend: numpy
   max_iters: 40

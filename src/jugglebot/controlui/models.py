@@ -53,6 +53,7 @@ class TelemetryFrame:
     hand_est_pose: tuple[float, ...]
     hand_est_vel: tuple[float, ...]
     hand_est_acc: tuple[float, ...]
+    homing: Mapping[str, object] = field(default_factory=dict)
     comm_stats: CommStats = field(default_factory=CommStats)
     debug: Mapping[str, object] = field(default_factory=dict)
     raw: Mapping[str, object] = field(default_factory=dict)
@@ -228,6 +229,7 @@ def _normalize_legacy_payload(payload: Mapping[str, object], source_id: str, rec
         hand_est_pose=_float_tuple(payload.get("hand_est_pose"), 6),
         hand_est_vel=_float_tuple(payload.get("hand_est_vel"), 6),
         hand_est_acc=_float_tuple(payload.get("hand_est_acc"), 6),
+        homing={},
         comm_stats=CommStats(
             can_rx_hz=_float_or_nan(payload.get("can_rx_hz")),
             can_tx_hz=_float_or_nan(payload.get("can_tx_hz")),
@@ -288,6 +290,7 @@ def _normalize_snapshot_payload(payload: Mapping[str, object], source_id: str, r
         hand_est_pose=_pose_state_to_legacy_pose(payload.get("estimated_pose")),
         hand_est_vel=_pose_state_to_legacy_velocity(payload.get("estimated_pose")),
         hand_est_acc=_pose_state_to_legacy_acceleration(payload.get("estimated_pose")),
+        homing=_mapping_or_empty(payload.get("homing")),
         comm_stats=CommStats(
             can_rx_hz=_float_or_nan(bus_stats.get("can_rx_hz")),
             can_tx_hz=_float_or_nan(bus_stats.get("can_tx_hz")),
